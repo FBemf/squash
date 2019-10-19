@@ -3,31 +3,24 @@
 #[cfg(test)]
 mod test;
 
-use std::convert::TryInto;
+use std::convert::TryFrom;
 
-pub fn squash(plaintext: &[u8]) -> (Vec<u8>, usize) {
-    let bwt = bw_transform(plaintext);
-    let encoded = run_length_encode(&mtf_transform(&bwt.block));
-    let squashed: Vec<u8> = encoded
-        .iter()
-        .flat_map(|a| vec![a.byte, a.length])
-        .collect();
-    (squashed, bwt.end_index)
+pub fn squash(plaintext: &[u8]) -> Vec<u8> {
+    let bwt_encoded = bw_transform(plaintext);
+    let mtf_encoded = mtf_transform(&bwt_encoded.block);
+    let rle_encoded = run_length_encode(&mtf_encoded);
+    bit_pack(&rle_encoded, bwt_encoded.end_index)
 }
 
-pub fn unsquash(cyphertext: &[u8], end_index: usize) -> Vec<u8> {
-    let mut unsquashed = vec![];
-    for index in 0..cyphertext.len() / 2 {
-        unsquashed.push(Run {
-            byte: cyphertext[index * 2],
-            length: cyphertext[index * 2 + 1],
-        });
-    }
-    let plaintext = bw_untransform(BwVec {
-        block: mtf_untransform(&run_length_decode(&unsquashed)),
-        end_index: end_index,
+pub fn unsquash(cyphertext: &[u8]) -> Result<Vec<u8>, &'static str> {
+    let (unpacked, end_index) = bit_unpack(&cyphertext)?;
+    let rle_decoded = run_length_decode(&unpacked);
+    let mtf_decoded = mtf_untransform(&rle_decoded);
+    let bw_decoded = bw_untransform(&BwVec {
+        block: mtf_decoded,
+        end_index,
     });
-    plaintext
+    Ok(bw_decoded)
 }
 
 static MAX_RUN_LENGTH: u8 = 32;
@@ -50,9 +43,9 @@ struct Packer {
     next_bit: u8,
 }
 
-struct Unpacker {
-    reserve: Vec<u8>,
-    working_byte: u8,
+struct Unpacker<'a> {
+    reserve: &'a [u8],
+    current_byte: usize,
     next_bit: u8,
 }
 
@@ -64,14 +57,17 @@ impl Packer {
             next_bit: 1,
         }
     }
-    fn append(&mut self, bits: u8, length: u8) {
-        let mut bit_mask = 1;
-        for _ in 0..length {
-            self.working_byte = self.working_byte | (bit_mask & bits);
-            bit_mask = bit_mask << 1;
+    fn push(&mut self, bits: u8, length: u8) {
+        assert!(length <= 8);
+        for bit_offset in 0..length {
+            if 0 != (1 << bit_offset) & bits {
+                self.working_byte = self.working_byte | self.next_bit;
+            } else {
+            }
             if self.next_bit == 128 {
                 self.next_bit = 1;
                 self.result.push(self.working_byte);
+                self.working_byte = 0;
             } else {
                 self.next_bit = self.next_bit << 1;
             }
@@ -85,27 +81,30 @@ impl Packer {
     }
 }
 
-impl Unpacker {
-    fn from_vec(mut base: Vec<u8>) -> Self {
-        base.reverse();
+impl<'a> Unpacker<'a> {
+    fn from_vec(base: &'a [u8]) -> Self {
         Unpacker {
             reserve: base,
-            working_byte: 0,
+            current_byte: 0,
             next_bit: 1,
         }
     }
-    fn append(&mut self, length: u8) -> Option<u8> {
+    fn pop(&mut self, length: u8) -> Option<u8> {
+        assert!(length <= 8);
         let mut out = 0;
-        for _ in 0..length {
-            if self.reserve.is_empty() {
+        for out_bit in 0..length {
+            if self.current_byte >= self.reserve.len() {
                 return None;
             }
-            out = out | (self.next_bit & self.reserve[self.reserve.len()]);
+            if 0 != (self.next_bit & self.reserve[self.current_byte]) {
+                out |= 1 << out_bit;
+            } else {
+            }
             if self.next_bit == 128 {
                 self.next_bit = 1;
-                self.reserve.pop();
+                self.current_byte += 1;
             } else {
-                self.next_bit = self.next_bit << 1;
+                self.next_bit <<= 1;
             }
         }
         Some(out)
@@ -115,26 +114,73 @@ impl Unpacker {
 fn bit_pack(cyphertext: &[Run], end_index: usize) -> Vec<u8> {
     let byte_mask: u8 = 255;
     let mut end_index_mut = end_index;
-    let mut packed: Vec<u8> = vec![];
+    let mut packed: Vec<u8> = Vec::with_capacity(cyphertext.len());
     for _ in 0..8 {
         // only works on x64
-        packed.push((end_index_mut & byte_mask as usize).try_into().unwrap());
-        end_index_mut = end_index_mut >> 8;
+        packed.push(u8::try_from(end_index_mut & byte_mask as usize).unwrap());
+        end_index_mut >>= 8;
     }
 
     let mut packing_state = Packer::from_vec(packed);
     for item in cyphertext {
         if item.byte == 0 {
-            packing_state.append(0, 1);
-            packing_state.append(item.length - 1, 5);
+            packing_state.push(0, 1);
+            packing_state.push(item.length - 1, 5);
         } else {
             for _ in 0..item.length {
-                packing_state.append(1, 1);
-                packing_state.append(item.byte, 8);
+                packing_state.push(1, 1);
+                packing_state.push(item.byte, 8);
             }
         }
     }
+    packing_state.push(1, 1);
     packing_state.finish()
+}
+
+fn bit_unpack<'a>(packed: &'a [u8]) -> Result<(Vec<Run>, usize), &'static str> {
+    let mut shift_amount = 0;
+    let mut unpacked: Vec<Run> = Vec::with_capacity(packed.len());
+    let mut end_index: usize = 0;
+    for i in 0..8 {
+        // only works on x64
+        end_index |= (packed[i] as usize) << shift_amount;
+        shift_amount += 8;
+    }
+    let mut unpacker = Unpacker::from_vec(&packed[8..]);
+
+    loop {
+        match unpacker.pop(1) {
+            Some(0) => {
+                // zero case
+                match unpacker.pop(5) {
+                    Some(n) => {
+                        unpacked.push(Run {
+                            byte: 0,
+                            length: n + 1,
+                        });
+                    }
+                    None => {
+                        return Err("bad format");
+                    }
+                }
+            }
+            Some(1) => {
+                // non-zero case
+                match unpacker.pop(8) {
+                    Some(n) => {
+                        unpacked.push(Run { byte: n, length: 1 });
+                    }
+                    None => {
+                        return Ok((unpacked, end_index));
+                    }
+                }
+            }
+            Some(_) => panic!("impossible bit"),
+            None => {
+                return Err("bad format");
+            }
+        }
+    }
 }
 
 fn bw_transform(plaintext: &[u8]) -> BwVec {
@@ -165,7 +211,7 @@ fn bw_transform(plaintext: &[u8]) -> BwVec {
     }
 }
 
-fn bw_untransform(cyphertext: BwVec) -> Vec<u8> {
+fn bw_untransform(cyphertext: &BwVec) -> Vec<u8> {
     if cyphertext.block.is_empty() {
         return vec![];
     }
@@ -214,7 +260,6 @@ fn mtf_transform(plaintext: &[u8]) -> Vec<u8> {
             }
         }
     }
-    println!("{:?}", out);
     out
 }
 
@@ -242,7 +287,7 @@ fn run_length_encode(plaintext: &[u8]) -> Vec<Run> {
         });
         for item in &plaintext[1..] {
             let last_length = out.last().unwrap().length;
-            if item == &out.last().unwrap().byte && last_length < MAX_RUN_LENGTH {
+            if *item == 0 && *item == out.last().unwrap().byte && last_length < MAX_RUN_LENGTH {
                 out.pop();
                 out.push(Run {
                     byte: *item,
@@ -259,14 +304,67 @@ fn run_length_encode(plaintext: &[u8]) -> Vec<Run> {
     out
 }
 
-fn run_length_decode(cyphertext: &Vec<Run>) -> Vec<u8> {
+fn run_length_decode(cyphertext: &[Run]) -> Vec<u8> {
     let mut out = Vec::with_capacity(cyphertext.len());
-    if !cyphertext.is_empty() {
-        for item in cyphertext {
-            for _ in 0..item.length {
-                out.push(item.byte);
-            }
+    for item in cyphertext {
+        for _ in 0..item.length {
+            out.push(item.byte);
         }
     }
     out
+}
+
+#[derive(PartialEq, Debug)]
+enum RunEncode {
+    RunA,
+    RunB,
+}
+
+static BIGGEST_BIT: u32 = 1 << 31;
+
+fn to_bijective(num: u32) -> Vec<RunEncode> {
+    let mut out = vec![];
+    if num == 0 {
+        panic!("can't use zero");
+    }
+    if num == 0xffff_ffff {
+        panic!("can't use 0xffff_ffff");
+    }
+    let mut sieve = 0;
+    let mut sieve_increment = 2;
+    loop {
+        let next_sieve = sieve | sieve_increment;
+        if next_sieve >= num || sieve_increment == BIGGEST_BIT {
+            let num2 = num - sieve - 1;
+            let mut pushing_bit = 1;
+            while pushing_bit < sieve_increment {
+                if num2 & pushing_bit == 0 {
+                    out.push(RunEncode::RunA);
+                } else {
+                    out.push(RunEncode::RunB);
+                }
+                pushing_bit <<= 1;
+            }
+            break;
+        }
+        sieve_increment <<= 1;
+        sieve = next_sieve;
+    }
+    out
+}
+
+fn from_bijective(num: &[RunEncode]) -> u32 {
+    if num.len() > 31 {
+        panic!("too long to be valid");
+    }
+    let mut out = 0;
+    let mut bit = 1;
+    for item in num {
+        if let RunEncode::RunB = item {
+            out |= bit;
+        }
+        bit <<= 1;
+    }
+    let base = (1 << num.len()) - 1;
+    out + base
 }

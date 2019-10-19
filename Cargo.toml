@@ -1,5 +1,5 @@
 [package]
-name = "bzip"
+name = "squash"
 version = "0.1.0"
 authors = ["Felipe Bemfica <felipe.m.p.bemfica@gmail.com>"]
 edition = "2018"
