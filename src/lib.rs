@@ -1,9 +1,10 @@
 #![warn(clippy::all)]
 
+use std::collections::VecDeque;
+use std::convert::TryFrom;
+
 #[cfg(test)]
 mod test;
-
-use std::convert::TryFrom;
 
 pub fn squash(plaintext: &[u8]) -> Vec<u8> {
     let bwt_encoded = bw_transform(plaintext);
@@ -320,15 +321,12 @@ enum RunEncode {
     RunB,
 }
 
-static BIGGEST_BIT: u32 = 1 << 31;
+static BIGGEST_BIT_32: u32 = 1 << 31;
 
 fn to_bijective(num: u32) -> Vec<RunEncode> {
     let mut out = vec![];
     if num == 0 {
         panic!("can't use zero");
-    }
-    if num == 0xffff_ffff {
-        panic!("can't use 0xffff_ffff");
     }
     let mut sieve = 0;
     let mut sieve_increment = 2;
@@ -354,7 +352,10 @@ fn to_bijective(num: u32) -> Vec<RunEncode> {
 }
 
 fn from_bijective(num: &[RunEncode]) -> u32 {
-    if num.len() > 31 {
+    if num.len() == 32 {
+        return 0xffff_ffff;
+    }
+    if num.len() > 32 {
         panic!("too long to be valid");
     }
     let mut out = 0;
@@ -367,4 +368,49 @@ fn from_bijective(num: &[RunEncode]) -> u32 {
     }
     let base = (1 << num.len()) - 1;
     out + base
+}
+
+static BIGGEST_BIT_64: u64 = 1 << 63;
+
+// the likelihood of a number in the arithmetic coding
+// will never be considered less than padding / (padding * base + packing_mem)
+static PACKING_MEMORY: usize = 1000;
+static PROBABILITY_PADDING: u32 = 100;
+
+fn pack_arithmetic<T>(plaintext: &[T], encode: fn(&T) -> u8, base: u8) -> Vec<u8> {
+    let mut out = Packer::from_vec(vec![]);
+    let mut queue: VecDeque<T> = VecDeque::with_capacity(PACKING_MEMORY);
+    let mut freqs: Vec<u32> = Vec::with_capacity(base as usize);
+    let mut probabilities: Vec<f64> = Vec::with_capacity(base as usize);
+    let mut bottom: u64 = 0;
+    let mut top: u64 = !0;
+    for i in 0..base {
+        freqs[i as usize] = PROBABILITY_PADDING;
+        probabilities[i as usize] = 1.0 / f64::from(base);
+    }
+    for item in plaintext {
+        let mut lower = 0.0;
+        let code = encode(item);
+        for p in &probabilities[0..code as usize] {
+            lower += p;
+        }
+        let upper = lower + probabilities[code as usize];
+        let diff = top - bottom;
+        bottom = diff / (1.0 / lower).trunc() as u64;
+        top = diff / (1.0 / upper).trunc() as u64;
+        while bottom & BIGGEST_BIT_64 == top & BIGGEST_BIT_64 {
+            if bottom & BIGGEST_BIT_64 == 0 {
+                out.push(0, 1);
+            } else {
+                out.push(1, 1);
+            }
+            bottom <<= 1;
+            top <<= 1
+        }
+    }
+    out.finish()
+}
+
+fn unpack_arithmetic<T>(cyphertext: &[T], decode: fn(u8) -> T, base: u8) -> Vec<T> {
+    vec![]
 }
