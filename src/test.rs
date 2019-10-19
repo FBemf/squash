@@ -20,6 +20,46 @@ static TEXT: &str =
      be copied rather than moved; note that this code will not yet compile.";
 
 #[test]
+fn arithmetic_test() {
+    assert_eq!(
+        pack_arithmetic(b"ddabdaddabccda", |a| { u32::from(a - b"a"[0]) }, 4),
+        &[143, 13, 36, 9]
+    );
+    assert_eq!(
+        pack_arithmetic(b"abbadabbadc", |a| { u32::from(a - b"a"[0]) }, 4),
+        &[40, 23, 40]
+    );
+    assert_eq!(
+        &unpack_arithmetic(
+            &[143, 13, 36, 9],
+            |b| { u8::try_from(b).unwrap() + b"a"[0] },
+            4,
+            14
+        )[..],
+        &b"ddabdaddabccda"[..]
+    );
+    assert_eq!(
+        &unpack_arithmetic(
+            &[40, 23, 40],
+            |b| { u8::try_from(b).unwrap() + b"a"[0] },
+            4,
+            11
+        )[..],
+        &b"abbadabbadc"[..]
+    );
+    let packed_text = pack_arithmetic(TEXT.as_bytes(), |a| u32::from(*a), 256);
+    assert_eq!(
+        String::from_utf8_lossy(&unpack_arithmetic(
+            &packed_text,
+            |b| u8::try_from(b).unwrap(),
+            256,
+            TEXT.len()
+        )),
+        TEXT
+    );
+}
+
+#[test]
 fn run_encode_test() {
     assert_eq!(to_bijective(6), &[RunEncode::RunB, RunEncode::RunB]);
     assert_eq!(
