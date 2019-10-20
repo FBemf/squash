@@ -122,7 +122,7 @@ impl Packer {
         assert!(length <= 8);
         for bit_offset in 0..length {
             if 0 != (1 << bit_offset) & bits {
-                self.working_byte = self.working_byte | self.next_bit;
+                self.working_byte |= self.next_bit;
             } else {
             }
             if self.next_bit == 128 {
@@ -130,7 +130,7 @@ impl Packer {
                 self.result.push(self.working_byte);
                 self.working_byte = 0;
             } else {
-                self.next_bit = self.next_bit << 1;
+                self.next_bit <<= 1;
             }
         }
     }
@@ -211,6 +211,11 @@ fn bw_untransform(cyphertext: &BwVec) -> Vec<u8> {
     for _ in 0..cyphertext.block.len() {
         let next_item = sorted[next_index];
         let mut count = 0;
+        // Can optimize by skipping the sort. Do the
+        // preprocessing for the cyphertext, then
+        // add up the counts incrementally to get a table
+        // of the first position of each new digit in the sorted array
+        // Like countsort
         for (index, val) in sorted.iter().enumerate() {
             if val == &next_item {
                 count += 1;
@@ -221,6 +226,8 @@ fn bw_untransform(cyphertext: &BwVec) -> Vec<u8> {
         }
         out.push(sorted[next_index]);
         let mut count2 = 0;
+        // Can optimize by preprocessing
+        // Iterate through once, annotating each one
         for (index, val) in cyphertext.block.iter().enumerate() {
             if val == &next_item {
                 count2 += 1;
