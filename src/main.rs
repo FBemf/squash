@@ -11,10 +11,10 @@ fn main() {
         eprintln!("Bad args! {:?}", args);
         return;
     }
-    let plaintext = fs::read_to_string(&args[1]).expect("File not found");
-    let squashed = squash(plaintext.as_bytes());
+    let plaintext = fs::read(&args[1]).expect("File not found");
+    let squashed = squash(&plaintext);
     let unsquashed = unsquash(&squashed).unwrap();
-    assert_eq!(plaintext, String::from_utf8_lossy(&unsquashed));
+    assert_eq!(&plaintext, &unsquashed);
     println!(
         "Ratio is {}",
         squashed.len() as f32 / plaintext.len() as f32

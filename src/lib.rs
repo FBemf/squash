@@ -8,6 +8,15 @@ mod test;
 
 static BYTE_MASK: u8 = !0;
 
+static BIGGEST_BIT_32: u32 = 1 << 31;
+
+static BIGGEST_BIT_64: u64 = 1 << 63;
+
+// the likelihood of a number in the arithmetic coding
+// will never be considered less than padding / (padding * base + memory)
+static FREQUENCY_MEMORY: usize = 1000;
+static FREQUENCY_PADDING: u32 = 100;
+
 pub fn squash(plaintext: &[u8]) -> Vec<u8> {
     let bwt_encoded = bw_transform(plaintext);
     let mtf_encoded = mtf_transform(&bwt_encoded.block);
@@ -25,7 +34,7 @@ pub fn squash(plaintext: &[u8]) -> Vec<u8> {
 }
 
 pub fn unsquash(cyphertext: &[u8]) -> Result<Vec<u8>, &'static str> {
-    let (body, front_matter) = get_front_matter(cyphertext);
+    let (body, front_matter) = get_front_matter(cyphertext)?;
     let arith_decoded = unpack_arithmetic(
         body,
         |x| match x {
@@ -45,6 +54,11 @@ pub fn unsquash(cyphertext: &[u8]) -> Result<Vec<u8>, &'static str> {
     Ok(bw_decoded)
 }
 
+struct FrontMatter {
+    length: usize,
+    end_index: usize,
+}
+
 fn add_front_matter(body: &[u8], length: usize, end_index: usize) -> Vec<u8> {
     let mut front_matter: Vec<u8> = Vec::with_capacity(16 + body.len());
     for shift in 0..8 {
@@ -61,7 +75,10 @@ fn add_front_matter(body: &[u8], length: usize, end_index: usize) -> Vec<u8> {
     front_matter
 }
 
-fn get_front_matter(body: &[u8]) -> (&[u8], FrontMatter) {
+fn get_front_matter(body: &[u8]) -> Result<(&[u8], FrontMatter), &'static str> {
+    if body.len() < 16 {
+        return Err("too short");
+    }
     let mut end_index: usize = 0;
     let mut length: usize = 0;
     for shift in 0..8 {
@@ -72,30 +89,7 @@ fn get_front_matter(body: &[u8]) -> (&[u8], FrontMatter) {
         // only works on 64 bit
         length |= (body[shift + 8] as usize) << (shift * 8);
     }
-    (&body[16..], FrontMatter { length, end_index })
-}
-
-struct FrontMatter {
-    length: usize,
-    end_index: usize,
-}
-
-#[derive(PartialEq, Debug)]
-struct BwVec {
-    block: Vec<u8>,
-    end_index: usize,
-}
-
-#[derive(PartialEq, Debug)]
-enum RunEncoded {
-    Byte(u8),
-    ZeroRun(Bijective),
-}
-
-#[derive(PartialEq, Debug, Clone, Copy)]
-enum Bijective {
-    A,
-    B,
+    Ok((&body[16..], FrontMatter { length, end_index }))
 }
 
 struct Packer {
@@ -172,6 +166,12 @@ impl<'a> Unpacker<'a> {
     }
 }
 
+#[derive(PartialEq, Debug)]
+struct BwVec {
+    block: Vec<u8>,
+    end_index: usize,
+}
+
 fn bw_transform(plaintext: &[u8]) -> BwVec {
     if plaintext.is_empty() {
         return BwVec {
@@ -179,6 +179,7 @@ fn bw_transform(plaintext: &[u8]) -> BwVec {
             end_index: 0,
         };
     }
+    // Gotta use a suffix array here
     let mut arr = Vec::with_capacity(plaintext.len());
     let mut arr2 = Vec::with_capacity(plaintext.len());
     for i in 0..plaintext.len() {
@@ -241,6 +242,7 @@ fn bw_untransform(cyphertext: &BwVec) -> Vec<u8> {
     out
 }
 
+// Can turn into an iterator
 fn mtf_transform(plaintext: &[u8]) -> Vec<u8> {
     let mut dict = Vec::with_capacity(256);
     let mut out = Vec::with_capacity(plaintext.len());
@@ -259,6 +261,7 @@ fn mtf_transform(plaintext: &[u8]) -> Vec<u8> {
     out
 }
 
+// Can turn into an iterator
 fn mtf_untransform(cyphertext: &[u8]) -> Vec<u8> {
     let mut dict = Vec::with_capacity(256);
     let mut out = Vec::with_capacity(cyphertext.len());
@@ -272,6 +275,12 @@ fn mtf_untransform(cyphertext: &[u8]) -> Vec<u8> {
         dict.insert(0, i);
     }
     out
+}
+
+#[derive(PartialEq, Debug)]
+enum RunEncoded {
+    Byte(u8),
+    ZeroRun(Bijective),
 }
 
 fn run_length_encode(plaintext: &[u8]) -> Vec<RunEncoded> {
@@ -325,7 +334,11 @@ fn run_length_decode(cyphertext: &[RunEncoded]) -> Vec<u8> {
     out
 }
 
-static BIGGEST_BIT_32: u32 = 1 << 31;
+#[derive(PartialEq, Debug, Clone, Copy)]
+enum Bijective {
+    A,
+    B,
+}
 
 fn to_bijective(num: u32) -> Vec<Bijective> {
     let mut out = vec![];
@@ -376,13 +389,6 @@ fn from_bijective(num: &[Bijective]) -> u32 {
     let base = (1 << num.len()) - 1;
     out + base
 }
-
-static BIGGEST_BIT_64: u64 = 1 << 63;
-
-// the likelihood of a number in the arithmetic coding
-// will never be considered less than padding / (padding * base + memory)
-static FREQUENCY_MEMORY: usize = 1000;
-static FREQUENCY_PADDING: u32 = 100;
 
 fn pack_arithmetic<T>(plaintext: &[T], encode: fn(&T) -> u32, base: u32) -> Vec<u8> {
     let mut out = Packer::from_vec(vec![]);
