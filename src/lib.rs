@@ -6,25 +6,79 @@ use std::convert::TryFrom;
 #[cfg(test)]
 mod test;
 
+static BYTE_MASK: u8 = !0;
+
 pub fn squash(plaintext: &[u8]) -> Vec<u8> {
     let bwt_encoded = bw_transform(plaintext);
     let mtf_encoded = mtf_transform(&bwt_encoded.block);
     let rle_encoded = run_length_encode(&mtf_encoded);
-    bit_pack(&rle_encoded, bwt_encoded.end_index)
+    let arith_encoded = pack_arithmetic(
+        &rle_encoded,
+        |x| match x {
+            RunEncoded::Byte(n) => u32::from(*n),
+            RunEncoded::ZeroRun(Bijective::A) => 0,
+            RunEncoded::ZeroRun(Bijective::B) => 256,
+        },
+        257,
+    );
+    add_front_matter(&arith_encoded, rle_encoded.len(), bwt_encoded.end_index)
 }
 
 pub fn unsquash(cyphertext: &[u8]) -> Result<Vec<u8>, &'static str> {
-    let (unpacked, end_index) = bit_unpack(&cyphertext)?;
-    let rle_decoded = run_length_decode(&unpacked);
+    let (body, front_matter) = get_front_matter(cyphertext);
+    let arith_decoded = unpack_arithmetic(
+        body,
+        |x| match x {
+            0 => RunEncoded::ZeroRun(Bijective::A),
+            256 => RunEncoded::ZeroRun(Bijective::B),
+            n => RunEncoded::Byte(u8::try_from(n).unwrap()),
+        },
+        257,
+        front_matter.length,
+    );
+    let rle_decoded = run_length_decode(&arith_decoded);
     let mtf_decoded = mtf_untransform(&rle_decoded);
     let bw_decoded = bw_untransform(&BwVec {
         block: mtf_decoded,
-        end_index,
+        end_index: front_matter.end_index,
     });
     Ok(bw_decoded)
 }
 
-static MAX_RUN_LENGTH: u8 = 32;
+fn add_front_matter(body: &[u8], length: usize, end_index: usize) -> Vec<u8> {
+    let mut front_matter: Vec<u8> = Vec::with_capacity(16 + body.len());
+    for shift in 0..8 {
+        // only works on 64 bit
+        front_matter.push(u8::try_from(end_index >> (shift * 8) & BYTE_MASK as usize).unwrap());
+    }
+    for shift in 0..8 {
+        // only works on 64 bit
+        front_matter.push(u8::try_from(length >> (shift * 8) & BYTE_MASK as usize).unwrap());
+    }
+    for i in body {
+        front_matter.push(*i);
+    }
+    front_matter
+}
+
+fn get_front_matter(body: &[u8]) -> (&[u8], FrontMatter) {
+    let mut end_index: usize = 0;
+    let mut length: usize = 0;
+    for shift in 0..8 {
+        // only works on 64 bit
+        end_index |= (body[shift] as usize) << (shift * 8);
+    }
+    for shift in 0..8 {
+        // only works on 64 bit
+        length |= (body[shift + 8] as usize) << (shift * 8);
+    }
+    (&body[16..], FrontMatter { length, end_index })
+}
+
+struct FrontMatter {
+    length: usize,
+    end_index: usize,
+}
 
 #[derive(PartialEq, Debug)]
 struct BwVec {
@@ -32,10 +86,16 @@ struct BwVec {
     end_index: usize,
 }
 
-#[derive(PartialEq, Debug, Clone)]
-struct Run {
-    byte: u8,
-    length: u8,
+#[derive(PartialEq, Debug)]
+enum RunEncoded {
+    Byte(u8),
+    ZeroRun(Bijective),
+}
+
+#[derive(PartialEq, Debug, Clone, Copy)]
+enum Bijective {
+    A,
+    B,
 }
 
 struct Packer {
@@ -109,78 +169,6 @@ impl<'a> Unpacker<'a> {
             }
         }
         Some(out)
-    }
-}
-
-fn bit_pack(cyphertext: &[Run], end_index: usize) -> Vec<u8> {
-    let byte_mask: u8 = 255;
-    let mut end_index_mut = end_index;
-    let mut packed: Vec<u8> = Vec::with_capacity(cyphertext.len());
-    for _ in 0..8 {
-        // only works on x64
-        packed.push(u8::try_from(end_index_mut & byte_mask as usize).unwrap());
-        end_index_mut >>= 8;
-    }
-
-    let mut packing_state = Packer::from_vec(packed);
-    for item in cyphertext {
-        if item.byte == 0 {
-            packing_state.push(0, 1);
-            packing_state.push(item.length - 1, 5);
-        } else {
-            for _ in 0..item.length {
-                packing_state.push(1, 1);
-                packing_state.push(item.byte, 8);
-            }
-        }
-    }
-    packing_state.push(1, 1);
-    packing_state.finish()
-}
-
-fn bit_unpack<'a>(packed: &'a [u8]) -> Result<(Vec<Run>, usize), &'static str> {
-    let mut shift_amount = 0;
-    let mut unpacked: Vec<Run> = Vec::with_capacity(packed.len());
-    let mut end_index: usize = 0;
-    for byte in &packed[0..8] {
-        // only works on x64
-        end_index |= (*byte as usize) << shift_amount;
-        shift_amount += 8;
-    }
-    let mut unpacker = Unpacker::from_vec(&packed[8..]);
-
-    loop {
-        match unpacker.pop(1) {
-            Some(0) => {
-                // zero case
-                match unpacker.pop(5) {
-                    Some(n) => {
-                        unpacked.push(Run {
-                            byte: 0,
-                            length: n + 1,
-                        });
-                    }
-                    None => {
-                        return Err("bad format");
-                    }
-                }
-            }
-            Some(1) => {
-                // non-zero case
-                match unpacker.pop(8) {
-                    Some(n) => {
-                        unpacked.push(Run { byte: n, length: 1 });
-                    }
-                    None => {
-                        return Ok((unpacked, end_index));
-                    }
-                }
-            }
-            Some(_) => panic!("impossible bit"),
-            None => {
-                return Err("bad format");
-            }
-        }
     }
 }
 
@@ -279,51 +267,60 @@ fn mtf_untransform(cyphertext: &[u8]) -> Vec<u8> {
     out
 }
 
-fn run_length_encode(plaintext: &[u8]) -> Vec<Run> {
+fn run_length_encode(plaintext: &[u8]) -> Vec<RunEncoded> {
     let mut out = Vec::with_capacity(plaintext.len());
-    if !plaintext.is_empty() {
-        out.push(Run {
-            byte: plaintext[0],
-            length: 1,
-        });
-        for item in &plaintext[1..] {
-            let last_length = out.last().unwrap().length;
-            if *item == 0 && *item == out.last().unwrap().byte && last_length < MAX_RUN_LENGTH {
-                out.pop();
-                out.push(Run {
-                    byte: *item,
-                    length: last_length + 1,
-                });
-            } else {
-                out.push(Run {
-                    byte: *item,
-                    length: 1,
-                });
+    let mut index = 0;
+    loop {
+        if index >= plaintext.len() {
+            return out;
+        }
+        if plaintext[index] != 0 {
+            out.push(RunEncoded::Byte(plaintext[index]));
+            index += 1;
+        } else {
+            let mut zeros = 0;
+            while index < plaintext.len() && plaintext[index] == 0 {
+                zeros += 1;
+                index += 1;
+            }
+            for item in to_bijective(zeros) {
+                out.push(RunEncoded::ZeroRun(item));
+            }
+        }
+    }
+}
+
+fn run_length_decode(cyphertext: &[RunEncoded]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(cyphertext.len());
+    let mut index = 0;
+    loop {
+        if index >= cyphertext.len() {
+            break;
+        }
+        if let RunEncoded::Byte(b) = cyphertext[index] {
+            out.push(b);
+            index += 1;
+        } else {
+            let mut zeros = vec![];
+            while index < cyphertext.len() {
+                if let RunEncoded::ZeroRun(z) = cyphertext[index] {
+                    zeros.push(z);
+                    index += 1
+                } else {
+                    break;
+                }
+            }
+            for _ in 0..from_bijective(&zeros) {
+                out.push(0);
             }
         }
     }
     out
 }
 
-fn run_length_decode(cyphertext: &[Run]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(cyphertext.len());
-    for item in cyphertext {
-        for _ in 0..item.length {
-            out.push(item.byte);
-        }
-    }
-    out
-}
-
-#[derive(PartialEq, Debug)]
-enum RunEncode {
-    RunA,
-    RunB,
-}
-
 static BIGGEST_BIT_32: u32 = 1 << 31;
 
-fn to_bijective(num: u32) -> Vec<RunEncode> {
+fn to_bijective(num: u32) -> Vec<Bijective> {
     let mut out = vec![];
     if num == 0 {
         panic!("can't use zero");
@@ -337,9 +334,9 @@ fn to_bijective(num: u32) -> Vec<RunEncode> {
             let mut pushing_bit = 1;
             while pushing_bit < sieve_increment {
                 if num2 & pushing_bit == 0 {
-                    out.push(RunEncode::RunA);
+                    out.push(Bijective::A);
                 } else {
-                    out.push(RunEncode::RunB);
+                    out.push(Bijective::B);
                 }
                 pushing_bit <<= 1;
             }
@@ -351,7 +348,10 @@ fn to_bijective(num: u32) -> Vec<RunEncode> {
     out
 }
 
-fn from_bijective(num: &[RunEncode]) -> u32 {
+fn from_bijective(num: &[Bijective]) -> u32 {
+    if num.is_empty() {
+        return 0;
+    }
     if num.len() == 32 {
         return 0xffff_ffff;
     }
@@ -361,7 +361,7 @@ fn from_bijective(num: &[RunEncode]) -> u32 {
     let mut out = 0;
     let mut bit = 1;
     for item in num {
-        if let RunEncode::RunB = item {
+        if let Bijective::B = item {
             out |= bit;
         }
         bit <<= 1;

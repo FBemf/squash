@@ -20,6 +20,54 @@ static TEXT: &str =
      be copied rather than moved; note that this code will not yet compile.";
 
 #[test]
+fn exploded_squash_test() {
+    let bwt_encoded = bw_transform(TEXT.as_bytes());
+    let mtf_encoded = mtf_transform(&bwt_encoded.block);
+    let rle_encoded = run_length_encode(&mtf_encoded);
+    let arith_encoded = pack_arithmetic(
+        &rle_encoded,
+        |x| match x {
+            RunEncoded::Byte(n) => u32::from(*n),
+            RunEncoded::ZeroRun(Bijective::A) => 0,
+            RunEncoded::ZeroRun(Bijective::B) => 256,
+        },
+        257,
+    );
+    let cyphertext = add_front_matter(&arith_encoded, rle_encoded.len(), bwt_encoded.end_index);
+
+    let (body, front_matter) = get_front_matter(&cyphertext);
+    let arith_decoded = unpack_arithmetic(
+        body,
+        |x| match x {
+            0 => RunEncoded::ZeroRun(Bijective::A),
+            256 => RunEncoded::ZeroRun(Bijective::B),
+            n => RunEncoded::Byte(u8::try_from(n).unwrap()),
+        },
+        257,
+        front_matter.length,
+    );
+    let rle_decoded = run_length_decode(&arith_decoded);
+    let mtf_decoded = mtf_untransform(&rle_decoded);
+    assert_eq!(body, &arith_encoded[..]);
+    assert_eq!(arith_decoded, rle_encoded);
+    for (i, e) in rle_decoded.iter().enumerate() {
+        if mtf_encoded[i] != *e {
+            println!("IT WAS AT {} with {} and {}", i, mtf_encoded[i], e);
+        }
+    }
+    assert_eq!(rle_decoded.len(), mtf_encoded.len());
+    assert_eq!(rle_decoded, mtf_encoded); // <-- YOU!
+    assert_eq!(mtf_decoded, bwt_encoded.block);
+    let bw_decoded = bw_untransform(&BwVec {
+        block: mtf_decoded,
+        end_index: front_matter.end_index,
+    });
+    assert_eq!(bwt_encoded.end_index, front_matter.end_index);
+    assert_eq!(rle_encoded.len(), front_matter.length);
+    assert_eq!(String::from_utf8_lossy(&bw_decoded), TEXT);
+}
+
+#[test]
 fn arithmetic_test() {
     assert_eq!(
         pack_arithmetic(b"ddabdaddabccda", |a| { u32::from(a - b"a"[0]) }, 4),
@@ -61,69 +109,21 @@ fn arithmetic_test() {
 
 #[test]
 fn run_encode_test() {
-    assert_eq!(to_bijective(6), &[RunEncode::RunB, RunEncode::RunB]);
-    assert_eq!(
-        to_bijective(7),
-        &[RunEncode::RunA, RunEncode::RunA, RunEncode::RunA]
-    );
-    assert_eq!(to_bijective(1), &[RunEncode::RunA]);
-    assert_eq!(
-        to_bijective(23),
-        &[
-            RunEncode::RunA,
-            RunEncode::RunA,
-            RunEncode::RunA,
-            RunEncode::RunB
-        ]
-    );
+    let test = 6;
+    let enc = to_bijective(test);
+    assert_eq!(from_bijective(&enc), test);
 
-    assert_eq!(6, from_bijective(&[RunEncode::RunB, RunEncode::RunB]));
-    assert_eq!(
-        7,
-        from_bijective(&[RunEncode::RunA, RunEncode::RunA, RunEncode::RunA])
-    );
-    assert_eq!(1, from_bijective(&[RunEncode::RunA]));
-    assert_eq!(
-        23,
-        from_bijective(&[
-            RunEncode::RunA,
-            RunEncode::RunA,
-            RunEncode::RunA,
-            RunEncode::RunB
-        ])
-    );
-}
+    let test = 7;
+    let enc = to_bijective(test);
+    assert_eq!(from_bijective(&enc), test);
 
-#[test]
-fn squash_exploded_test() {
-    let plaintext = TEXT.as_bytes();
-    let bwt_encoded = bw_transform(plaintext);
-    let mtf_encoded = mtf_transform(&bwt_encoded.block);
-    let rle_encoded = run_length_encode(&mtf_encoded);
-    let packed = bit_pack(&rle_encoded, bwt_encoded.end_index);
-    match bit_unpack(&packed) {
-        Ok((unpacked, end_index)) => {
-            assert_eq!(end_index, bwt_encoded.end_index);
-            assert_eq!(unpacked, rle_encoded);
-            let rle_decoded = run_length_decode(&unpacked);
-            assert_eq!(rle_decoded, mtf_encoded);
-            let mtf_decoded = mtf_untransform(&rle_decoded);
-            assert_eq!(mtf_decoded, bwt_encoded.block);
-            let plaintext2 = bw_untransform(&BwVec {
-                block: mtf_decoded,
-                end_index: end_index,
-            });
-            assert_eq!(plaintext, &plaintext2[..]);
-            println!(
-                "Compression ratio of {}",
-                packed.len() as f32 / plaintext.len() as f32
-            );
-        }
-        Err(s) => {
-            panic!(s);
-        }
-    };
-    return ();
+    let test = 23;
+    let enc = to_bijective(test);
+    assert_eq!(from_bijective(&enc), test);
+
+    let test = 1;
+    let enc = to_bijective(test);
+    assert_eq!(from_bijective(&enc), test);
 }
 
 #[test]
@@ -133,7 +133,6 @@ fn packers_test() {
     p.push(7, 8);
     p.push(2, 2);
     let f = p.finish();
-    println!("product: {:?}", f);
     let mut u = Unpacker::from_vec(&f);
     assert_eq!(u.pop(5), Some(5));
     assert_eq!(u.pop(8), Some(7));
@@ -145,182 +144,41 @@ fn e2e_test() {
     let plaintext = TEXT.as_bytes();
     let squashed = squash(plaintext);
     let unsquashed = unsquash(&squashed).unwrap();
-    assert_eq!(plaintext, &unsquashed[..]);
+    assert_eq!(
+        String::from_utf8_lossy(plaintext),
+        String::from_utf8_lossy(&unsquashed[..])
+    );
 }
 
 #[test]
 fn bwt_test() {
-    assert_eq!(
-        bw_transform(b"abcdabcdefghefgh"),
-        BwVec {
-            block: vec![104, 100, 97, 97, 98, 98, 99, 99, 104, 100, 101, 101, 102, 102, 103, 103],
-            end_index: 0,
-        }
-    );
-    assert_eq!(
-        bw_transform(b"toblerone bars"),
-        BwVec {
-            block: Vec::from(&b"eb onlbotrears"[..]),
-            end_index: 13,
-        }
-    );
-    assert_eq!(
-        b"abcdabcdefghefgh",
-        &bw_untransform(&BwVec {
-            block: vec![104, 100, 97, 97, 98, 98, 99, 99, 104, 100, 101, 101, 102, 102, 103, 103],
-            end_index: 0,
-        })[..]
-    );
-    assert_eq!(
-        b"toblerone bars",
-        &bw_untransform(&BwVec {
-            block: Vec::from(&b"eb onlbotrears"[..]),
-            end_index: 13,
-        })[..]
-    );
+    let test = b"abcdabcdefghefgh";
+    let enc = bw_transform(test);
+    assert_eq!(bw_untransform(&enc), test);
+
+    let test = b"toblerone bars";
+    let enc = bw_transform(test);
+    assert_eq!(bw_untransform(&enc), test);
 }
 
 #[test]
 fn mtf_test() {
-    assert_eq!(
-        mtf_transform(b"aaaaabbbbbcccccddddd"),
-        [97, 0, 0, 0, 0, 98, 0, 0, 0, 0, 99, 0, 0, 0, 0, 100, 0, 0, 0, 0]
-    );
-    assert_eq!(
-        mtf_transform(b"syllogism"),
-        [115, 121, 110, 0, 113, 107, 109, 5, 112]
-    );
-    assert_eq!(
-        mtf_untransform(&[97, 0, 0, 0, 0, 98, 0, 0, 0, 0, 99, 0, 0, 0, 0, 100, 0, 0, 0, 0]),
-        b"aaaaabbbbbcccccddddd"
-    );
-    assert_eq!(
-        mtf_untransform(&[115, 121, 110, 0, 113, 107, 109, 5, 112]),
-        b"syllogism"
-    );
+    let test = b"aaaaabbbbbcccccddddd";
+    let enc = mtf_transform(test);
+    assert_eq!(mtf_untransform(&enc), test);
+
+    let test = b"syllogism";
+    let enc = mtf_transform(test);
+    assert_eq!(mtf_untransform(&enc), test);
+
     assert_eq!(mtf_transform(&[]), &[]);
     assert_eq!(mtf_untransform(&[]), &[]);
 }
 
 #[test]
 fn rle_test() {
-    assert_eq!(
-        run_length_encode(b"bbfdddeejreewwwer"),
-        [
-            Run {
-                byte: 98,
-                length: 1
-            },
-            Run {
-                byte: 98,
-                length: 1
-            },
-            Run {
-                byte: 102,
-                length: 1
-            },
-            Run {
-                byte: 100,
-                length: 1
-            },
-            Run {
-                byte: 100,
-                length: 1
-            },
-            Run {
-                byte: 100,
-                length: 1
-            },
-            Run {
-                byte: 101,
-                length: 1
-            },
-            Run {
-                byte: 101,
-                length: 1
-            },
-            Run {
-                byte: 106,
-                length: 1
-            },
-            Run {
-                byte: 114,
-                length: 1
-            },
-            Run {
-                byte: 101,
-                length: 1
-            },
-            Run {
-                byte: 101,
-                length: 1
-            },
-            Run {
-                byte: 119,
-                length: 1
-            },
-            Run {
-                byte: 119,
-                length: 1
-            },
-            Run {
-                byte: 119,
-                length: 1
-            },
-            Run {
-                byte: 101,
-                length: 1
-            },
-            Run {
-                byte: 114,
-                length: 1
-            }
-        ]
-    );
-    assert_eq!(
-        run_length_decode(&vec![
-            Run {
-                byte: 98,
-                length: 2
-            },
-            Run {
-                byte: 102,
-                length: 1
-            },
-            Run {
-                byte: 100,
-                length: 3
-            },
-            Run {
-                byte: 101,
-                length: 2
-            },
-            Run {
-                byte: 106,
-                length: 1
-            },
-            Run {
-                byte: 114,
-                length: 1
-            },
-            Run {
-                byte: 101,
-                length: 2
-            },
-            Run {
-                byte: 119,
-                length: 3
-            },
-            Run {
-                byte: 101,
-                length: 1
-            },
-            Run {
-                byte: 114,
-                length: 1
-            }
-        ]),
-        b"bbfdddeejreewwwer"
-    );
+    let test = b"bbfdddeejreewwwer";
+    let enc = run_length_encode(test);
+    assert_eq!(run_length_decode(&enc), test);
     assert_eq!(run_length_encode(b""), []);
 }
