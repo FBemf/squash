@@ -22,17 +22,6 @@ fn suffix_compare(a: &Suffix, b: &Suffix) -> Ordering {
 }
 
 impl<'a> SuffixArray<'a> {
-    pub fn from_array_naive(body: &'a [u8]) -> SuffixArray {
-        let mut suffixes = vec![0; body.len()];
-        for (i, v) in suffixes.iter_mut().enumerate() {
-            *v = i;
-        }
-        suffixes.sort_by(|a, b| body[*a..].cmp(&body[*b..]));
-        SuffixArray {
-            text: body,
-            array: suffixes,
-        }
-    }
     pub fn from_array(body: &'a [u8]) -> SuffixArray {
         // special thanks to https://www.geeksforgeeks.org/suffix-array-set-2-a-nlognlogn-algorithm/
         let mut array: Vec<Suffix> = vec![
@@ -51,10 +40,14 @@ impl<'a> SuffixArray<'a> {
                 i64::from(body[i + 1])
             }
         }
+        array.push(Suffix {
+            index: body.len(),
+            rank: (-1, -2),
+        });
 
         array.sort_by(suffix_compare);
 
-        let mut indices: Vec<usize> = vec![0; body.len()];
+        let mut indices: Vec<usize> = vec![0; body.len() + 1];
         let mut k = 4;
         loop {
             if k >= 2 * array.len() {

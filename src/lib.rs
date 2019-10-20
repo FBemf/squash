@@ -182,104 +182,65 @@ fn bw_transform(plaintext: &[u8]) -> BwVec {
             end_index: 0,
         };
     }
-    let suffix_array = SuffixArray::from_array_naive(plaintext);
-    println!("{}", suffix_array.fmt());
+    let suffix_array = SuffixArray::from_array(plaintext);
     let mut out = Vec::with_capacity(plaintext.len());
     let mut end = 0;
     for (s_index, s_val) in suffix_array.raw().iter().enumerate() {
         let p_index = *s_val;
         if p_index == 0 {
-            out.push(plaintext[plaintext.len() - 1]);
+            out.push(36);
             end = s_index;
         } else {
             out.push(plaintext[p_index - 1]);
         }
     }
-    for i in 0..out.len() {
-        println!("{}:\t{}", i, String::from_utf8_lossy(&out[i..=i]));
-    }
-    println!("And end is {}", end);
     BwVec {
         block: out,
         end_index: end,
     }
 }
 
-fn bw_transform_old(plaintext: &[u8]) -> BwVec {
-    if plaintext.is_empty() {
-        return BwVec {
-            block: vec![],
-            end_index: 0,
-        };
-    }
-    // Gotta use a suffix array here
-    let mut arr = Vec::with_capacity(plaintext.len());
-    let mut arr2 = Vec::with_capacity(plaintext.len());
-    for i in 0..plaintext.len() {
-        let a = &plaintext[0..i];
-        let b = &plaintext[i..plaintext.len()];
-        arr.push([b, a].concat());
-    }
-    arr.sort();
-    println!("OLD ONE");
-    for (i, v) in arr.iter().enumerate() {
-        println!("{}:\t{}", i, String::from_utf8_lossy(v));
-    }
-    let mut end = 0;
-    for item in &arr {
-        arr2.push(item[plaintext.len() - 1]);
-        if item == &plaintext {
-            end = arr2.len() - 1;
-        }
-    }
-    BwVec {
-        block: arr2,
-        end_index: end,
-    }
-}
-
 fn bw_untransform(cyphertext: &BwVec) -> Vec<u8> {
-    if cyphertext.block.is_empty() {
-        return vec![];
+    let mut out = vec![0; cyphertext.block.len() - 1];
+
+    // counts stores the number of items of each
+    // kind in the cyphertext
+    let mut counts = vec![0; 256];
+
+    // position stores, for each entry in cyphetext, n
+    // where the entry is the nth instance of its kind
+    // starting at zero
+    let mut position = vec![0; cyphertext.block.len()];
+    for (index, val) in cyphertext.block.iter().enumerate() {
+        if index != cyphertext.end_index {
+            position[index] = counts[*val as usize];
+            counts[*val as usize] += 1;
+        }
     }
-    let mut sorted = cyphertext.block.clone();
-    sorted.sort();
-    let mut out = Vec::with_capacity(cyphertext.block.len());
-    let mut next_index = cyphertext.end_index;
-    for _ in 0..cyphertext.block.len() {
-        let next_item = sorted[next_index];
-        let mut count = 0;
-        // Can optimize by skipping the sort. Do the
-        // preprocessing for the cyphertext, then
-        // add up the counts incrementally to get a table
-        // of the first position of each new digit in the sorted array
-        // Like countsort
-        for (index, val) in sorted.iter().enumerate() {
-            if val == &next_item {
-                count += 1;
-            }
-            if index == next_index {
-                break;
-            }
-        }
-        out.push(sorted[next_index]);
-        let mut count2 = 0;
-        // Can optimize by preprocessing
-        // Iterate through once, annotating each one
-        for (index, val) in cyphertext.block.iter().enumerate() {
-            if val == &next_item {
-                count2 += 1;
-            }
-            if count == count2 {
-                next_index = index;
-                break;
-            }
-        }
+
+    // now counts become summed to be the index of
+    // the beginning of each section of the sorted array
+    let mut sections = counts;
+    for i in (0..sections.len() - 1).rev() {
+        sections[i + 1] = sections[i]
+    }
+    sections[0] = 1;
+    for i in 1..sections.len() {
+        sections[i] += sections[i - 1];
+    }
+
+    let mut next_index = 0;
+    for out_index in (0..cyphertext.block.len() - 1).rev() {
+        let next_item = cyphertext.block[next_index];
+        out[out_index] = next_item;
+
+        let char_position = position[next_index];
+
+        next_index = sections[next_item as usize] + char_position;
     }
     out
 }
 
-// Can turn into an iterator
 fn mtf_transform(plaintext: &[u8]) -> Vec<u8> {
     let mut dict = Vec::with_capacity(256);
     let mut out = Vec::with_capacity(plaintext.len());
@@ -298,7 +259,6 @@ fn mtf_transform(plaintext: &[u8]) -> Vec<u8> {
     out
 }
 
-// Can turn into an iterator
 fn mtf_untransform(cyphertext: &[u8]) -> Vec<u8> {
     let mut dict = Vec::with_capacity(256);
     let mut out = Vec::with_capacity(cyphertext.len());

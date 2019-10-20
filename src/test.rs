@@ -147,6 +147,10 @@ fn e2e_test() {
 
 #[test]
 fn bwt_test() {
+    let test = b"banana_banana";
+    let enc = bw_transform(test);
+    assert_eq!(bw_untransform(&enc), test);
+
     let test = b"banana_banana$";
     let enc = bw_transform(test);
     assert_eq!(bw_untransform(&enc), test);
@@ -167,13 +171,20 @@ fn bwt_test() {
     assert_eq!(bw_untransform(&enc), test);
 }
 
+static SA_BANANA: &str =
+    "SUFFIX ARRAY FOR banana banana banana:\n0:\t\'\'\n1:\t\' \
+     banana\'\n2:\t\' banana banana\'\n3:\t\'a\'\n4:\t\'a banana\'\n5:\t\'a banana \
+     banana\'\n6:\t\'ana\'\n7:\t\'ana banana\'\n8:\t\'ana banana banana\'\n9:\t\'\
+     anana\'\n10:\t\'anana banana\'\n11:\t\'anana banana banana\'\n12:\t\'banana\'\n\
+     13:\t\'banana banana\'\n14:\t\'banana banana banana\'\n15:\t\'na\'\n16:\t\'\
+     na banana\'\n17:\t\'na banana banana\'\n18:\t\'nana\'\n19:\t\'nana banana\'\n\
+     20:\t\'nana banana banana\'\n";
+
 #[test]
 fn suffix_array_test() {
     let test = b"banana banana banana";
     let sa1 = SuffixArray::from_array(test);
-    let sa2 = SuffixArray::from_array_naive(test);
-    println!("{}\n{}", sa1.fmt(), sa2.fmt());
-    assert_eq!(sa1.fmt(), sa2.fmt());
+    assert_eq!(sa1.fmt(), SA_BANANA);
 }
 
 #[test]
