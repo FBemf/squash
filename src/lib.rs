@@ -1,10 +1,13 @@
 #![warn(clippy::all)]
 
-use std::collections::VecDeque;
-use std::convert::TryFrom;
-
 #[cfg(test)]
 mod test;
+
+mod suffixarray;
+
+use std::collections::VecDeque;
+use std::convert::TryFrom;
+use suffixarray::SuffixArray;
 
 static BYTE_MASK: u8 = !0;
 
@@ -179,6 +182,36 @@ fn bw_transform(plaintext: &[u8]) -> BwVec {
             end_index: 0,
         };
     }
+    let suffix_array = SuffixArray::from_array_naive(plaintext);
+    println!("{}", suffix_array.fmt());
+    let mut out = Vec::with_capacity(plaintext.len());
+    let mut end = 0;
+    for (s_index, s_val) in suffix_array.raw().iter().enumerate() {
+        let p_index = *s_val;
+        if p_index == 0 {
+            out.push(plaintext[plaintext.len() - 1]);
+            end = s_index;
+        } else {
+            out.push(plaintext[p_index - 1]);
+        }
+    }
+    for i in 0..out.len() {
+        println!("{}:\t{}", i, String::from_utf8_lossy(&out[i..=i]));
+    }
+    println!("And end is {}", end);
+    BwVec {
+        block: out,
+        end_index: end,
+    }
+}
+
+fn bw_transform_old(plaintext: &[u8]) -> BwVec {
+    if plaintext.is_empty() {
+        return BwVec {
+            block: vec![],
+            end_index: 0,
+        };
+    }
     // Gotta use a suffix array here
     let mut arr = Vec::with_capacity(plaintext.len());
     let mut arr2 = Vec::with_capacity(plaintext.len());
@@ -188,6 +221,10 @@ fn bw_transform(plaintext: &[u8]) -> BwVec {
         arr.push([b, a].concat());
     }
     arr.sort();
+    println!("OLD ONE");
+    for (i, v) in arr.iter().enumerate() {
+        println!("{}:\t{}", i, String::from_utf8_lossy(v));
+    }
     let mut end = 0;
     for item in &arr {
         arr2.push(item[plaintext.len() - 1]);

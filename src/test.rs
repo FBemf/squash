@@ -35,7 +35,7 @@ fn exploded_squash_test() {
     );
     let cyphertext = add_front_matter(&arith_encoded, rle_encoded.len(), bwt_encoded.end_index);
 
-    let (body, front_matter) = get_front_matter(&cyphertext);
+    let (body, front_matter) = get_front_matter(&cyphertext).unwrap();
     let arith_decoded = unpack_arithmetic(
         body,
         |x| match x {
@@ -50,13 +50,8 @@ fn exploded_squash_test() {
     let mtf_decoded = mtf_untransform(&rle_decoded);
     assert_eq!(body, &arith_encoded[..]);
     assert_eq!(arith_decoded, rle_encoded);
-    for (i, e) in rle_decoded.iter().enumerate() {
-        if mtf_encoded[i] != *e {
-            println!("IT WAS AT {} with {} and {}", i, mtf_encoded[i], e);
-        }
-    }
     assert_eq!(rle_decoded.len(), mtf_encoded.len());
-    assert_eq!(rle_decoded, mtf_encoded); // <-- YOU!
+    assert_eq!(rle_decoded, mtf_encoded);
     assert_eq!(mtf_decoded, bwt_encoded.block);
     let bw_decoded = bw_untransform(&BwVec {
         block: mtf_decoded,
@@ -152,6 +147,17 @@ fn e2e_test() {
 
 #[test]
 fn bwt_test() {
+    let test = b"banana_banana$";
+    let enc = bw_transform(test);
+    assert_eq!(bw_untransform(&enc), test);
+
+    let test = b"blooby blabby blam. man manam malamla. blom blooby blop.";
+    let enc = bw_transform(test);
+    assert_eq!(
+        String::from_utf8_lossy(&bw_untransform(&enc)),
+        String::from_utf8_lossy(test)
+    );
+
     let test = b"abcdabcdefghefgh";
     let enc = bw_transform(test);
     assert_eq!(bw_untransform(&enc), test);
@@ -159,6 +165,15 @@ fn bwt_test() {
     let test = b"toblerone bars";
     let enc = bw_transform(test);
     assert_eq!(bw_untransform(&enc), test);
+}
+
+#[test]
+fn suffix_array_test() {
+    let test = b"banana banana banana";
+    let sa1 = SuffixArray::from_array(test);
+    let sa2 = SuffixArray::from_array_naive(test);
+    println!("{}\n{}", sa1.fmt(), sa2.fmt());
+    assert_eq!(sa1.fmt(), sa2.fmt());
 }
 
 #[test]
