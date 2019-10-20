@@ -3,7 +3,7 @@
 use std::cmp::Ordering;
 
 pub struct SuffixArray<'a> {
-    text: &'a [u8],
+    _text: &'a [u8],
     array: Vec<usize>,
 }
 
@@ -86,21 +86,24 @@ impl<'a> SuffixArray<'a> {
         }
 
         SuffixArray {
-            text: body,
+            _text: body,
             array: array.iter().map(|a| a.index).collect(),
         }
     }
     pub fn raw(self) -> Vec<usize> {
         self.array
     }
-    pub fn fmt(&self) -> String {
+    pub fn _fmt(&self) -> String {
         let mut out = String::new();
-        out += &format!("SUFFIX ARRAY FOR {}:\n", String::from_utf8_lossy(self.text));
+        out += &format!(
+            "SUFFIX ARRAY FOR {}:\n",
+            String::from_utf8_lossy(self._text)
+        );
         for (i, line) in self.array.iter().enumerate() {
             out += &format!(
                 "{}:\t'{}'\n",
                 i,
-                String::from_utf8_lossy(&self.text[*line..])
+                String::from_utf8_lossy(&self._text[*line..])
             );
         }
         out

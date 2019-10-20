@@ -64,32 +64,28 @@ fn exploded_squash_test() {
 
 #[test]
 fn arithmetic_test() {
-    assert_eq!(
-        pack_arithmetic(b"ddabdaddabccda", |a| { u32::from(a - b"a"[0]) }, 4),
-        &[143, 13, 36, 9]
+    let test = b"ddabdaddabccda";
+    let alphabet_size = 4;
+    let enc = pack_arithmetic(test, |a| u32::from(a - b"a"[0]), alphabet_size);
+    let dec = unpack_arithmetic(
+        &enc,
+        |b| u8::try_from(b).unwrap() + b"a"[0],
+        alphabet_size,
+        test.len(),
     );
-    assert_eq!(
-        pack_arithmetic(b"abbadabbadc", |a| { u32::from(a - b"a"[0]) }, 4),
-        &[40, 23, 40]
+    assert_eq!(&test[..], &dec[..]);
+
+    let test = b"qwertyqweyrtqwyeeewteyyrqwwerttqywetrtrrrrrrrrrrwert";
+    let alphabet_size = 26;
+    let enc = pack_arithmetic(test, |a| u32::from(a - b"a"[0]), alphabet_size);
+    let dec = unpack_arithmetic(
+        &enc,
+        |b| u8::try_from(b).unwrap() + b"a"[0],
+        alphabet_size,
+        test.len(),
     );
-    assert_eq!(
-        &unpack_arithmetic(
-            &[143, 13, 36, 9],
-            |b| { u8::try_from(b).unwrap() + b"a"[0] },
-            4,
-            14
-        )[..],
-        &b"ddabdaddabccda"[..]
-    );
-    assert_eq!(
-        &unpack_arithmetic(
-            &[40, 23, 40],
-            |b| { u8::try_from(b).unwrap() + b"a"[0] },
-            4,
-            11
-        )[..],
-        &b"abbadabbadc"[..]
-    );
+    assert_eq!(&test[..], &dec[..]);
+
     let packed_text = pack_arithmetic(TEXT.as_bytes(), |a| u32::from(*a), 256);
     assert_eq!(
         String::from_utf8_lossy(&unpack_arithmetic(
@@ -184,7 +180,7 @@ static SA_BANANA: &str =
 fn suffix_array_test() {
     let test = b"banana banana banana";
     let sa1 = SuffixArray::from_array(test);
-    assert_eq!(sa1.fmt(), SA_BANANA);
+    assert_eq!(sa1._fmt(), SA_BANANA);
 }
 
 #[test]

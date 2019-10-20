@@ -17,13 +17,17 @@ static BIGGEST_BIT_64: u64 = 1 << 63;
 
 // the likelihood of a number in the arithmetic coding
 // will never be considered less than padding / (padding * base + memory)
-static FREQUENCY_MEMORY: usize = 1000;
-static FREQUENCY_PADDING: u32 = 100;
+static FREQUENCY_MEMORY: usize = 10_000;
+static FREQUENCY_PADDING: u32 = 50;
 
 pub fn squash(plaintext: &[u8]) -> Vec<u8> {
+    println!("bw");
     let bwt_encoded = bw_transform(plaintext);
+    println!("mtf");
     let mtf_encoded = mtf_transform(&bwt_encoded.block);
+    println!("rle");
     let rle_encoded = run_length_encode(&mtf_encoded);
+    println!("arith");
     let arith_encoded = pack_arithmetic(
         &rle_encoded,
         |x| match x {
@@ -33,11 +37,14 @@ pub fn squash(plaintext: &[u8]) -> Vec<u8> {
         },
         257,
     );
+    println!("front");
     add_front_matter(&arith_encoded, rle_encoded.len(), bwt_encoded.end_index)
 }
 
 pub fn unsquash(cyphertext: &[u8]) -> Result<Vec<u8>, &'static str> {
+    println!("front");
     let (body, front_matter) = get_front_matter(cyphertext)?;
+    println!("arith");
     let arith_decoded = unpack_arithmetic(
         body,
         |x| match x {
@@ -48,8 +55,11 @@ pub fn unsquash(cyphertext: &[u8]) -> Result<Vec<u8>, &'static str> {
         257,
         front_matter.length,
     );
+    println!("rle");
     let rle_decoded = run_length_decode(&arith_decoded);
+    println!("mtf");
     let mtf_decoded = mtf_untransform(&rle_decoded);
+    println!("bw");
     let bw_decoded = bw_untransform(&BwVec {
         block: mtf_decoded,
         end_index: front_matter.end_index,
@@ -244,14 +254,14 @@ fn bw_untransform(cyphertext: &BwVec) -> Vec<u8> {
 fn mtf_transform(plaintext: &[u8]) -> Vec<u8> {
     let mut dict = Vec::with_capacity(256);
     let mut out = Vec::with_capacity(plaintext.len());
-    for i in 0..255 {
+    for i in (0..256).rev() {
         dict.push(i as u8);
     }
     for item in plaintext {
-        for i in 0..255 {
+        for i in (0..256).rev() {
             if dict[i] == *item {
                 dict.remove(i);
-                dict.insert(0, *item);
+                dict.push(*item);
                 out.push(i as u8);
             }
         }
@@ -262,14 +272,14 @@ fn mtf_transform(plaintext: &[u8]) -> Vec<u8> {
 fn mtf_untransform(cyphertext: &[u8]) -> Vec<u8> {
     let mut dict = Vec::with_capacity(256);
     let mut out = Vec::with_capacity(cyphertext.len());
-    for i in 0..255 {
+    for i in (0..256).rev() {
         dict.push(i as u8);
     }
     for item in cyphertext {
         let i = dict[*item as usize];
         out.push(i);
         dict.remove(*item as usize);
-        dict.insert(0, i);
+        dict.push(i);
     }
     out
 }

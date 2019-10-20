@@ -14,6 +14,7 @@ fn main() {
     let plaintext = fs::read(&args[1]).expect("File not found");
     let squashed = squash(&plaintext);
     let unsquashed = unsquash(&squashed).unwrap();
+    println!("done");
     assert_eq!(&plaintext, &unsquashed);
     println!(
         "Ratio is {}",
