@@ -7,28 +7,93 @@ mod suffixarray;
 
 use std::collections::VecDeque;
 use std::convert::TryFrom;
+use std::convert::TryInto;
+use std::io;
 use suffixarray::SuffixArray;
 
-static BYTE_MASK: u8 = !0;
+const BIGGEST_BIT_32: u32 = 1 << 31;
 
-static BIGGEST_BIT_32: u32 = 1 << 31;
-
-static BIGGEST_BIT_64: u64 = 1 << 63;
+const BIGGEST_BIT_64: u64 = 1 << 63;
 
 // the likelihood of a number in the arithmetic coding
 // will never be considered less than padding / (padding * base + memory)
-static FREQUENCY_MEMORY: usize = 10_000;
-static FREQUENCY_PADDING: u32 = 50;
+const FREQUENCY_MEMORY: usize = 10_000;
+const FREQUENCY_PADDING: u32 = 50;
 
-pub fn squash(plaintext: &[u8]) -> Vec<u8> {
-    println!("bw");
+const BLOCK_SIZE: usize = 1 << 12;
+
+pub struct IoTransaction {
+    pub read: usize,
+    pub written: usize,
+}
+
+pub fn squash(
+    reader: &mut dyn io::Read,
+    writer: &mut dyn io::Write,
+) -> Result<IoTransaction, io::Error> {
+    let mut bytes_read = 0;
+    let mut bytes_written = 0;
+    loop {
+        let mut block = vec![0; BLOCK_SIZE];
+        let bytes = reader.read(&mut block)?;
+        match bytes {
+            0 => {
+                break;
+            }
+            n => {
+                bytes_read += n;
+                bytes_written += writer.write(&squash_block(&block))?;
+            }
+        }
+    }
+    Ok(IoTransaction {
+        read: bytes_read,
+        written: bytes_written,
+    })
+}
+
+pub fn unsquash(
+    reader: &mut dyn io::Read,
+    writer: &mut dyn io::Write,
+) -> Result<IoTransaction, io::Error> {
+    let mut bytes_read = 0;
+    let mut bytes_written = 0;
+    loop {
+        let mut block = [0; BLOCK_SIZE];
+        let bytes = reader.read(&mut block)?;
+        match bytes {
+            0 => {
+                break;
+            }
+            n => {
+                bytes_read += n;
+                match unsquash_block(&block) {
+                    Ok(x) => {
+                        bytes_written += writer.write(&x)?;
+                    }
+                    Err(s) => {
+                        return Err(io::Error::new(io::ErrorKind::Other, s));
+                    }
+                }
+            }
+        }
+    }
+    Ok(IoTransaction {
+        read: bytes_read,
+        written: bytes_written,
+    })
+}
+
+pub fn squash_block(plaintext: &[u8]) -> Vec<u8> {
     let bwt_encoded = bw_transform(plaintext);
-    println!("mtf");
     let mtf_encoded = mtf_transform(&bwt_encoded.block);
-    println!("rle");
     let rle_encoded = run_length_encode(&mtf_encoded);
-    println!("arith");
-    let arith_encoded = pack_arithmetic(
+    let front_matter = create_front_matter(
+        rle_encoded.len().try_into().unwrap(),
+        bwt_encoded.end_index.try_into().unwrap(),
+    );
+    pack_arithmetic(
+        front_matter,
         &rle_encoded,
         |x| match x {
             RunEncoded::Byte(n) => u32::from(*n),
@@ -36,15 +101,11 @@ pub fn squash(plaintext: &[u8]) -> Vec<u8> {
             RunEncoded::ZeroRun(Bijective::B) => 256,
         },
         257,
-    );
-    println!("front");
-    add_front_matter(&arith_encoded, rle_encoded.len(), bwt_encoded.end_index)
+    )
 }
 
-pub fn unsquash(cyphertext: &[u8]) -> Result<Vec<u8>, &'static str> {
-    println!("front");
+pub fn unsquash_block(cyphertext: &[u8]) -> Result<Vec<u8>, &'static str> {
     let (body, front_matter) = get_front_matter(cyphertext)?;
-    println!("arith");
     let arith_decoded = unpack_arithmetic(
         body,
         |x| match x {
@@ -53,13 +114,10 @@ pub fn unsquash(cyphertext: &[u8]) -> Result<Vec<u8>, &'static str> {
             n => RunEncoded::Byte(u8::try_from(n).unwrap()),
         },
         257,
-        front_matter.length,
+        front_matter.length.try_into().unwrap(),
     );
-    println!("rle");
     let rle_decoded = run_length_decode(&arith_decoded);
-    println!("mtf");
     let mtf_decoded = mtf_untransform(&rle_decoded);
-    println!("bw");
     let bw_decoded = bw_untransform(&BwVec {
         block: mtf_decoded,
         end_index: front_matter.end_index,
@@ -68,41 +126,27 @@ pub fn unsquash(cyphertext: &[u8]) -> Result<Vec<u8>, &'static str> {
 }
 
 struct FrontMatter {
-    length: usize,
-    end_index: usize,
+    length: u32,
+    end_index: u32,
 }
 
-fn add_front_matter(body: &[u8], length: usize, end_index: usize) -> Vec<u8> {
-    let mut front_matter: Vec<u8> = Vec::with_capacity(16 + body.len());
-    for shift in 0..8 {
-        // only works on 64 bit
-        front_matter.push(u8::try_from(end_index >> (shift * 8) & BYTE_MASK as usize).unwrap());
-    }
-    for shift in 0..8 {
-        // only works on 64 bit
-        front_matter.push(u8::try_from(length >> (shift * 8) & BYTE_MASK as usize).unwrap());
-    }
-    for i in body {
-        front_matter.push(*i);
-    }
+fn create_front_matter(length: u32, end_index: u32) -> Vec<u8> {
+    let mut front_matter: Vec<u8> = Vec::with_capacity(8);
+    front_matter.extend_from_slice(&end_index.to_le_bytes()[..]);
+    front_matter.extend_from_slice(&length.to_le_bytes()[..]);
     front_matter
 }
 
 fn get_front_matter(body: &[u8]) -> Result<(&[u8], FrontMatter), &'static str> {
-    if body.len() < 16 {
+    if body.len() < 8 {
         return Err("too short");
     }
-    let mut end_index: usize = 0;
-    let mut length: usize = 0;
-    for shift in 0..8 {
-        // only works on 64 bit
-        end_index |= (body[shift] as usize) << (shift * 8);
-    }
-    for shift in 0..8 {
-        // only works on 64 bit
-        length |= (body[shift + 8] as usize) << (shift * 8);
-    }
-    Ok((&body[16..], FrontMatter { length, end_index }))
+    let mut staging = [0; 4];
+    staging.copy_from_slice(&body[0..4]);
+    let end_index = u32::from_le_bytes(staging).try_into().unwrap();
+    staging.copy_from_slice(&body[4..8]);
+    let length = u32::from_le_bytes(staging).try_into().unwrap();
+    Ok((&body[8..], FrontMatter { length, end_index }))
 }
 
 struct Packer {
@@ -182,7 +226,7 @@ impl<'a> Unpacker<'a> {
 #[derive(PartialEq, Debug)]
 struct BwVec {
     block: Vec<u8>,
-    end_index: usize,
+    end_index: u32,
 }
 
 fn bw_transform(plaintext: &[u8]) -> BwVec {
@@ -206,7 +250,7 @@ fn bw_transform(plaintext: &[u8]) -> BwVec {
     }
     BwVec {
         block: out,
-        end_index: end,
+        end_index: end.try_into().unwrap(),
     }
 }
 
@@ -222,7 +266,7 @@ fn bw_untransform(cyphertext: &BwVec) -> Vec<u8> {
     // starting at zero
     let mut position = vec![0; cyphertext.block.len()];
     for (index, val) in cyphertext.block.iter().enumerate() {
-        if index != cyphertext.end_index {
+        if index != cyphertext.end_index.try_into().unwrap() {
             position[index] = counts[*val as usize];
             counts[*val as usize] += 1;
         }
@@ -397,8 +441,13 @@ fn from_bijective(num: &[Bijective]) -> u32 {
     out + base
 }
 
-fn pack_arithmetic<T>(plaintext: &[T], encode: fn(&T) -> u32, base: u32) -> Vec<u8> {
-    let mut out = Packer::from_vec(vec![]);
+fn pack_arithmetic<T>(
+    front_matter: Vec<u8>,
+    plaintext: &[T],
+    encode: fn(&T) -> u32,
+    base: u32,
+) -> Vec<u8> {
+    let mut out = Packer::from_vec(front_matter);
     let mut queue: VecDeque<u32> = VecDeque::with_capacity(FREQUENCY_MEMORY);
     let mut freqs: Vec<u32> = Vec::with_capacity(base as usize);
     let mut bottom: u64 = 0;

@@ -24,7 +24,12 @@ fn exploded_squash_test() {
     let bwt_encoded = bw_transform(TEXT.as_bytes());
     let mtf_encoded = mtf_transform(&bwt_encoded.block);
     let rle_encoded = run_length_encode(&mtf_encoded);
+    let front_matter = create_front_matter(
+        rle_encoded.len().try_into().unwrap(),
+        bwt_encoded.end_index.try_into().unwrap(),
+    );
     let arith_encoded = pack_arithmetic(
+        front_matter,
         &rle_encoded,
         |x| match x {
             RunEncoded::Byte(n) => u32::from(*n),
@@ -33,9 +38,8 @@ fn exploded_squash_test() {
         },
         257,
     );
-    let cyphertext = add_front_matter(&arith_encoded, rle_encoded.len(), bwt_encoded.end_index);
 
-    let (body, front_matter) = get_front_matter(&cyphertext).unwrap();
+    let (body, front_matter) = get_front_matter(&arith_encoded).unwrap();
     let arith_decoded = unpack_arithmetic(
         body,
         |x| match x {
@@ -44,11 +48,10 @@ fn exploded_squash_test() {
             n => RunEncoded::Byte(u8::try_from(n).unwrap()),
         },
         257,
-        front_matter.length,
+        front_matter.length.try_into().unwrap(),
     );
     let rle_decoded = run_length_decode(&arith_decoded);
     let mtf_decoded = mtf_untransform(&rle_decoded);
-    assert_eq!(body, &arith_encoded[..]);
     assert_eq!(arith_decoded, rle_encoded);
     assert_eq!(rle_decoded.len(), mtf_encoded.len());
     assert_eq!(rle_decoded, mtf_encoded);
@@ -58,15 +61,27 @@ fn exploded_squash_test() {
         end_index: front_matter.end_index,
     });
     assert_eq!(bwt_encoded.end_index, front_matter.end_index);
-    assert_eq!(rle_encoded.len(), front_matter.length);
+    assert_eq!(rle_encoded.len(), front_matter.length.try_into().unwrap());
     assert_eq!(String::from_utf8_lossy(&bw_decoded), TEXT);
+}
+
+#[test]
+fn front_matter() {
+    let len = 352_354_634;
+    let e_i = 1_112_323_534;
+    let mut block = create_front_matter(len, e_i);
+    block.append(&mut vec![1, 2, 3]);
+    let (body, f_m) = get_front_matter(&block).unwrap();
+    assert_eq!(f_m.length, len);
+    assert_eq!(f_m.end_index, e_i);
+    assert_eq!(&body, &[1, 2, 3]);
 }
 
 #[test]
 fn arithmetic_test() {
     let test = b"ddabdaddabccda";
     let alphabet_size = 4;
-    let enc = pack_arithmetic(test, |a| u32::from(a - b"a"[0]), alphabet_size);
+    let enc = pack_arithmetic(vec![], test, |a| u32::from(a - b"a"[0]), alphabet_size);
     let dec = unpack_arithmetic(
         &enc,
         |b| u8::try_from(b).unwrap() + b"a"[0],
@@ -77,7 +92,7 @@ fn arithmetic_test() {
 
     let test = b"qwertyqweyrtqwyeeewteyyrqwwerttqywetrtrrrrrrrrrrwert";
     let alphabet_size = 26;
-    let enc = pack_arithmetic(test, |a| u32::from(a - b"a"[0]), alphabet_size);
+    let enc = pack_arithmetic(vec![], test, |a| u32::from(a - b"a"[0]), alphabet_size);
     let dec = unpack_arithmetic(
         &enc,
         |b| u8::try_from(b).unwrap() + b"a"[0],
@@ -86,7 +101,7 @@ fn arithmetic_test() {
     );
     assert_eq!(&test[..], &dec[..]);
 
-    let packed_text = pack_arithmetic(TEXT.as_bytes(), |a| u32::from(*a), 256);
+    let packed_text = pack_arithmetic(vec![], TEXT.as_bytes(), |a| u32::from(*a), 256);
     assert_eq!(
         String::from_utf8_lossy(&unpack_arithmetic(
             &packed_text,
@@ -133,8 +148,8 @@ fn packers_test() {
 #[test]
 fn e2e_test() {
     let plaintext = TEXT.as_bytes();
-    let squashed = squash(plaintext);
-    let unsquashed = unsquash(&squashed).unwrap();
+    let squashed = squash_block(plaintext);
+    let unsquashed = unsquash_block(&squashed).unwrap();
     assert_eq!(
         String::from_utf8_lossy(plaintext),
         String::from_utf8_lossy(&unsquashed[..])
