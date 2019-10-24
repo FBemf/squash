@@ -17,22 +17,35 @@ const BIGGEST_BIT_64: u64 = 1 << 63;
 
 // the likelihood of a number in the arithmetic coding
 // will never be considered less than padding / (padding * base + memory)
-const FREQUENCY_MEMORY: usize = 10_000;
+const FREQUENCY_MEMORY: u32 = 10_000;
 const FREQUENCY_PADDING: u32 = 50;
 
-const BLOCK_SIZE: usize = 1 << 12;
+const BLOCK_SIZE: usize = 1 << 16;
 
-pub struct IoTransaction {
-    pub read: usize,
-    pub written: usize,
-}
+const MAGIC_NUMBER: u32 = 0xca55_e77e;
+const FILETYPE_VERSION: u8 = 1;
 
-pub fn squash(
-    reader: &mut dyn io::Read,
-    writer: &mut dyn io::Write,
-) -> Result<IoTransaction, io::Error> {
+pub fn squash(reader: &mut dyn io::Read, writer: &mut dyn io::Write) -> Result<usize, io::Error> {
     let mut bytes_read = 0;
     let mut bytes_written = 0;
+
+    let mut four_bytes = MAGIC_NUMBER.to_le_bytes();
+    bytes_written += writer.write(&four_bytes)?;
+
+    let one_byte = FILETYPE_VERSION.to_le_bytes();
+    bytes_written += writer.write(&one_byte)?;
+
+    four_bytes = FREQUENCY_MEMORY.to_le_bytes();
+    bytes_written += writer.write(&four_bytes)?;
+    let frequency_memory = u32::from_le_bytes(four_bytes);
+
+    four_bytes = FREQUENCY_PADDING.to_le_bytes();
+    bytes_written += writer.write(&four_bytes)?;
+    let frequency_padding = u32::from_le_bytes(four_bytes);
+
+    let _ = frequency_memory;
+    let _ = frequency_padding;
+
     loop {
         let mut block = vec![0; BLOCK_SIZE];
         let bytes = reader.read(&mut block)?;
@@ -42,31 +55,60 @@ pub fn squash(
             }
             n => {
                 bytes_read += n;
-                bytes_written += writer.write(&squash_block(&block))?;
+                let squashed = squash_block(&block[0..n]);
+                let squashed_len = u32::try_from(squashed.len()).unwrap().to_le_bytes();
+                bytes_written += writer.write(&squashed_len)?;
+                bytes_written += writer.write(&squashed)?;
             }
-        }
+        };
     }
-    Ok(IoTransaction {
-        read: bytes_read,
-        written: bytes_written,
-    })
+    let _ = bytes_read;
+    Ok(bytes_written)
 }
 
-pub fn unsquash(
-    reader: &mut dyn io::Read,
-    writer: &mut dyn io::Write,
-) -> Result<IoTransaction, io::Error> {
-    let mut bytes_read = 0;
-    let mut bytes_written = 0;
+pub fn unsquash(reader: &mut dyn io::Read, writer: &mut dyn io::Write) -> Result<usize, io::Error> {
+    let mut one_byte: [u8; 1] = [0; 1];
+    let mut four_bytes: [u8; 4] = [0; 4];
+    let mut bytes_read: usize = 0;
+    let mut bytes_written: usize = 0;
+
+    bytes_read += reader.read(&mut four_bytes)?;
+    let magic_number = u32::from_le_bytes(four_bytes);
+    assert_eq!(magic_number, MAGIC_NUMBER);
+
+    bytes_read += reader.read(&mut one_byte)?;
+    let version_number = u8::from_le_bytes(one_byte);
+    assert_eq!(version_number, FILETYPE_VERSION);
+
+    bytes_read += reader.read(&mut four_bytes)?;
+    let frequency_memory = u32::from_le_bytes(four_bytes);
+    assert_eq!(frequency_memory, FREQUENCY_MEMORY);
+
+    bytes_read += reader.read(&mut four_bytes)?;
+    let frequency_padding = u32::from_le_bytes(four_bytes);
+    assert_eq!(frequency_padding, FREQUENCY_PADDING);
+
     loop {
-        let mut block = [0; BLOCK_SIZE];
-        let bytes = reader.read(&mut block)?;
-        match bytes {
+        let block_len = match reader.read(&mut four_bytes)? {
             0 => {
                 break;
             }
+            4 => {
+                bytes_read += 4;
+                u32::from_le_bytes(four_bytes)
+            }
+            _ => {
+                panic!("expected something");
+            }
+        };
+        let mut block = vec![0; block_len.try_into().unwrap()];
+        match reader.read(&mut block)? {
+            0 => {
+                panic!("expected something");
+            }
             n => {
-                bytes_read += n;
+                let _ = n;
+                bytes_read += usize::try_from(block_len).unwrap();
                 match unsquash_block(&block) {
                     Ok(x) => {
                         bytes_written += writer.write(&x)?;
@@ -76,12 +118,10 @@ pub fn unsquash(
                     }
                 }
             }
-        }
+        };
     }
-    Ok(IoTransaction {
-        read: bytes_read,
-        written: bytes_written,
-    })
+    let _ = bytes_read;
+    Ok(bytes_written)
 }
 
 pub fn squash_block(plaintext: &[u8]) -> Vec<u8> {
@@ -390,7 +430,6 @@ enum Bijective {
     A,
     B,
 }
-
 fn to_bijective(num: u32) -> Vec<Bijective> {
     let mut out = vec![];
     if num == 0 {
@@ -448,7 +487,7 @@ fn pack_arithmetic<T>(
     base: u32,
 ) -> Vec<u8> {
     let mut out = Packer::from_vec(front_matter);
-    let mut queue: VecDeque<u32> = VecDeque::with_capacity(FREQUENCY_MEMORY);
+    let mut queue: VecDeque<u32> = VecDeque::with_capacity(FREQUENCY_MEMORY.try_into().unwrap());
     let mut freqs: Vec<u32> = Vec::with_capacity(base as usize);
     let mut bottom: u64 = 0;
     let mut top: u64 = !0;
@@ -478,7 +517,7 @@ fn pack_arithmetic<T>(
         }
         queue.push_back(code);
         freqs[code as usize] += 1;
-        if queue.len() > FREQUENCY_MEMORY {
+        if queue.len() > FREQUENCY_MEMORY.try_into().unwrap() {
             freqs[queue.pop_front().unwrap() as usize] -= 1;
         }
     }
@@ -494,7 +533,7 @@ pub fn unpack_arithmetic<T>(
 ) -> Vec<T> {
     let mut unpacker = Unpacker::from_vec(cyphertext);
     let mut out: Vec<T> = Vec::with_capacity(cyphertext.len());
-    let mut queue: VecDeque<u32> = VecDeque::with_capacity(FREQUENCY_MEMORY);
+    let mut queue: VecDeque<u32> = VecDeque::with_capacity(FREQUENCY_MEMORY.try_into().unwrap());
     let mut freqs: Vec<u32> = Vec::with_capacity(base as usize);
     let mut bottom: u64 = 0;
     let mut top: u64 = !0;
@@ -557,7 +596,7 @@ pub fn unpack_arithmetic<T>(
         }
         queue.push_back(code);
         freqs[code as usize] += 1;
-        if queue.len() > FREQUENCY_MEMORY {
+        if queue.len() > FREQUENCY_MEMORY.try_into().unwrap() {
             freqs[queue.pop_front().unwrap() as usize] -= 1;
         }
     }

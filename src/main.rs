@@ -22,7 +22,7 @@ fn main() {
             Err(x) => panic!(x),
         };
         match squash(&mut read, &mut write) {
-            Ok(x) => eprintln!("Read {}, wrote {}.", x.read, x.written),
+            Ok(x) => eprintln!("Wrote {}.", x),
             Err(x) => eprintln!("Error: {}", x),
         }
     } else if args[1] == "dec" {
@@ -35,7 +35,7 @@ fn main() {
             Err(x) => panic!(x),
         };
         match unsquash(&mut read, &mut write) {
-            Ok(x) => eprintln!("Read {}, wrote {}.", x.read, x.written),
+            Ok(x) => eprintln!("Wrote {}.", x),
             Err(x) => panic!(x),
         }
     } else {
