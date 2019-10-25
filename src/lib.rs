@@ -11,9 +11,8 @@ use std::convert::TryInto;
 use std::io;
 use suffixarray::SuffixArray;
 
-const BIGGEST_BIT_32: u32 = 1 << 31;
-
 const BIGGEST_BIT_64: u64 = 1 << 63;
+const BIGGEST_BIT_32: u32 = 1 << 31;
 
 // the likelihood of a number in the arithmetic coding
 // will never be considered less than padding / (padding * base + memory)
@@ -513,7 +512,7 @@ fn pack_arithmetic<T>(
                 out.push(1, 1);
             }
             bottom <<= 1;
-            top <<= 1
+            top <<= 1;
         }
         queue.push_back(code);
         freqs[code as usize] += 1;
