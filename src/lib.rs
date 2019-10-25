@@ -5,6 +5,8 @@ mod test;
 
 mod suffixarray;
 
+use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::convert::TryFrom;
 use std::convert::TryInto;
@@ -18,8 +20,9 @@ const BIGGEST_BIT_32: u32 = 1 << 31;
 // will never be considered less than padding / (padding * base + memory)
 const FREQUENCY_MEMORY: u32 = 10_000;
 const FREQUENCY_PADDING: u32 = 50;
+const RECALCULATION_FREQUENCY: u32 = 50;
 
-const BLOCK_SIZE: usize = 1 << 16;
+const BLOCK_SIZE: usize = 1 << 18;
 
 const MAGIC_NUMBER: u32 = 0xca55_e77e;
 const FILETYPE_VERSION: u8 = 1;
@@ -42,8 +45,13 @@ pub fn squash(reader: &mut dyn io::Read, writer: &mut dyn io::Write) -> Result<u
     bytes_written += writer.write(&four_bytes)?;
     let frequency_padding = u32::from_le_bytes(four_bytes);
 
+    four_bytes = RECALCULATION_FREQUENCY.to_le_bytes();
+    bytes_written += writer.write(&four_bytes)?;
+    let recalculation_frequency = u32::from_le_bytes(four_bytes);
+
     let _ = frequency_memory;
     let _ = frequency_padding;
+    let _ = recalculation_frequency;
 
     loop {
         let mut block = vec![0; BLOCK_SIZE];
@@ -86,6 +94,10 @@ pub fn unsquash(reader: &mut dyn io::Read, writer: &mut dyn io::Write) -> Result
     bytes_read += reader.read(&mut four_bytes)?;
     let frequency_padding = u32::from_le_bytes(four_bytes);
     assert_eq!(frequency_padding, FREQUENCY_PADDING);
+
+    bytes_read += reader.read(&mut four_bytes)?;
+    let recalculation_frequency = u32::from_le_bytes(four_bytes);
+    assert_eq!(recalculation_frequency, RECALCULATION_FREQUENCY);
 
     loop {
         let block_len = match reader.read(&mut four_bytes)? {
@@ -488,23 +500,34 @@ fn pack_arithmetic<T>(
     let mut out = Packer::from_vec(front_matter);
     let mut queue: VecDeque<u32> = VecDeque::with_capacity(FREQUENCY_MEMORY.try_into().unwrap());
     let mut freqs: Vec<u32> = Vec::with_capacity(base as usize);
+    let mut freq_map: HashMap<u32, u64> = HashMap::new();
     let mut bottom: u64 = 0;
     let mut top: u64 = !0;
+    let mut time_till_recalc = 0;
+    let mut total = 0;
     let total_padding = base * FREQUENCY_PADDING;
     for _ in 0..base {
         freqs.push(FREQUENCY_PADDING);
     }
     for item in plaintext {
-        let mut lower = 0;
-        let code = encode(item);
-        for f in &freqs[0..code as usize] {
-            lower += f
+        if time_till_recalc == 0 {
+            time_till_recalc = RECALCULATION_FREQUENCY;
+            let mut total_so_far: u64 = 0;
+            for (i, freq) in freqs.iter().enumerate() {
+                freq_map.insert(u32::try_from(i).unwrap(), total_so_far);
+                total_so_far += u64::from(*freq);
+            }
+            freq_map.insert(base, total_so_far);
+            total = u64::from(total_padding) + u64::try_from(queue.len()).unwrap();
+        } else {
+            time_till_recalc -= 1;
         }
-        let upper = lower + freqs[code as usize];
+        let code = encode(item);
+        let lower = freq_map[&code];
+        let upper = freq_map[&(code + 1)];
         let diff = top - bottom;
-        let total = total_padding + u32::try_from(queue.len()).unwrap();
-        top = bottom + (diff / u64::from(total)) * u64::from(upper);
-        bottom += (diff / u64::from(total)) * u64::from(lower);
+        top = bottom + (diff / total) * upper;
+        bottom += (diff / total) * lower;
         while bottom & BIGGEST_BIT_64 == top & BIGGEST_BIT_64 {
             if bottom & BIGGEST_BIT_64 == 0 {
                 out.push(0, 1);
@@ -534,10 +557,14 @@ pub fn unpack_arithmetic<T>(
     let mut out: Vec<T> = Vec::with_capacity(cyphertext.len());
     let mut queue: VecDeque<u32> = VecDeque::with_capacity(FREQUENCY_MEMORY.try_into().unwrap());
     let mut freqs: Vec<u32> = Vec::with_capacity(base as usize);
+    let mut freq_map: HashMap<u32, u64> = HashMap::new();
+    let mut freq_map_reverse: BTreeMap<u64, u32> = BTreeMap::new();
+    let mut time_till_recalc = 0;
     let mut bottom: u64 = 0;
     let mut top: u64 = !0;
     let mut unpacked: u64 = 0;
     let mut operating_bit = BIGGEST_BIT_64;
+    let mut total = 0;
     for _ in 0..64 {
         match unpacker.pop(1) {
             Some(1) => {
@@ -555,23 +582,36 @@ pub fn unpack_arithmetic<T>(
         freqs.push(FREQUENCY_PADDING);
     }
     for _ in 0..length {
-        let diff = top - bottom;
-        let total = total_padding + u32::try_from(queue.len()).unwrap();
-        let mut lower = 0;
-        let mut upper = 0;
-        let mut code = 0;
-        for (i, f) in freqs.iter().enumerate() {
-            if bottom + (diff / u64::from(total)) * u64::from(lower + f) < unpacked {
-                lower += f;
-            } else {
-                upper = lower + f;
-                code = u32::try_from(i).unwrap();
-                out.push(decode(code));
-                break;
+        if time_till_recalc == 0 {
+            time_till_recalc = RECALCULATION_FREQUENCY;
+            freq_map_reverse.clear();
+            let mut total_so_far: u64 = 0;
+            for (i, freq) in freqs.iter().enumerate() {
+                freq_map.insert(u32::try_from(i).unwrap(), total_so_far);
+                freq_map_reverse.insert(total_so_far, u32::try_from(i).unwrap());
+                total_so_far += u64::from(*freq);
             }
+            freq_map.insert(base, total_so_far);
+            total = u64::from(total_padding) + u64::try_from(queue.len()).unwrap();
+        } else {
+            time_till_recalc -= 1;
         }
-        top = bottom + (diff / u64::from(total)) * u64::from(upper);
-        bottom += (diff / u64::from(total)) * u64::from(lower);
+        let diff = top - bottom;
+        let cap =
+            u64::try_from((u128::from(unpacked - bottom) * u128::from(total)) / u128::from(diff))
+                .unwrap();
+        let mut code = match freq_map_reverse.range(0..cap).rev().next() {
+            Some((_, code)) => *code,
+            None => 0,
+        };
+        while code + 1 < base && bottom + (diff / total) * freq_map[&(code + 1)] < unpacked {
+            code += 1;
+        }
+        let lower = freq_map[&code];
+        let upper = freq_map[&(code + 1)];
+        out.push(decode(code));
+        top = bottom + (diff / total) * upper;
+        bottom += (diff / total) * lower;
         let mut counter = 0;
         let mut comparison_bit = BIGGEST_BIT_64;
         while bottom & comparison_bit == top & comparison_bit {
