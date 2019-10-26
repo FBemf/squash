@@ -1,8 +1,6 @@
 #![warn(clippy::all)]
 
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
-use std::convert::TryFrom;
 
 pub struct SuffixArray<'a> {
     _text: &'a [u8],
@@ -20,60 +18,6 @@ fn suffix_compare(a: &Suffix, b: &Suffix) -> Ordering {
         a.rank.1.cmp(&b.rank.1)
     } else {
         a.rank.0.cmp(&b.rank.0)
-    }
-}
-
-fn count_sort(suffixes: &mut Vec<Suffix>, vecs: &mut (Vec<u64>, Vec<u64>, Vec<Suffix>)) {
-    struct Count {
-        rank: u64,
-        count: u64,
-    }
-    let mut counts: BTreeMap<(i64, i64), Count> = BTreeMap::new();
-    for suff in suffixes.iter() {
-        counts
-            .entry(suff.rank)
-            .or_insert(Count { rank: 0, count: 0 })
-            .count += 1;
-    }
-    for (index, (_, count)) in counts.iter_mut().enumerate() {
-        count.rank = u64::try_from(index).unwrap();
-    }
-    let buckets = &mut vecs.0;
-    for (index, bucket) in buckets.iter_mut().enumerate() {
-        *bucket = counts[&suffixes[index].rank].rank;
-    }
-    //let buckets: Vec<u64> = suffixes.iter().map(|a| counts[&a.rank].rank).collect();
-    let mut total = 0;
-    let sums = &mut vecs.1;
-    for (index, (_, count)) in counts.iter().enumerate() {
-        sums[index] = total;
-        total += count.count;
-    }
-    /*let mut sums: Vec<u64> = counts
-    .iter()
-    .fold(
-        (Vec::<u64>::with_capacity(suffixes.len()), 0),
-        |mut accum, count| {
-            accum.0.push(accum.1);
-            (accum.0, accum.1 + count.1.count)
-        },
-    )
-    .0;*/
-    /*let mut result = vec![
-        Suffix {
-            index: 0,
-            rank: (0, 0),
-        };
-        suffixes.len()
-    ];*/
-    let result = &mut vecs.2;
-    for (index, suff) in suffixes.iter().enumerate() {
-        let bucket = buckets[index] as usize;
-        result[sums[bucket] as usize] = suff.clone();
-        sums[bucket] += 1;
-    }
-    for (index, elem) in suffixes.iter_mut().enumerate() {
-        *elem = result[index].clone();
     }
 }
 
@@ -101,20 +45,7 @@ impl<'a> SuffixArray<'a> {
             rank: (-1, -2),
         });
 
-        let mut vecs = (
-            vec![0; array.len()],
-            vec![0; array.len()],
-            vec![
-                Suffix {
-                    index: 0,
-                    rank: (0, 0)
-                };
-                array.len()
-            ],
-        );
-
-        //array.sort_by(suffix_compare);
-        count_sort(&mut array, &mut vecs);
+        array.sort_by(suffix_compare);
 
         let mut indices: Vec<usize> = vec![0; body.len() + 1];
         let mut k = 4;
@@ -149,8 +80,7 @@ impl<'a> SuffixArray<'a> {
                 }
             }
 
-            //array.sort_by(suffix_compare);
-            count_sort(&mut array, &mut vecs);
+            array.sort_by(suffix_compare);
 
             k *= 2;
         }
