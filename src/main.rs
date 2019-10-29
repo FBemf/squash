@@ -1,7 +1,6 @@
 #![warn(clippy::all)]
 
-extern crate squash;
-use squash::*;
+use squash::squash_algorithm::*;
 use std::env;
 use std::fs;
 use std::time::Instant;

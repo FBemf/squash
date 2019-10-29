@@ -1,9 +1,9 @@
 #![warn(clippy::all)]
 
-#[cfg(test)]
-mod test;
-
+pub mod squash_algorithm;
 mod suffixarray;
+
+/*
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -641,3 +641,4 @@ pub fn unpack_arithmetic<T>(
     }
     out
 }
+*/
