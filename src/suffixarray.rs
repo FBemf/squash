@@ -1,5 +1,3 @@
-#![warn(clippy::all)]
-
 use std::cmp::Ordering;
 
 pub struct SuffixArray<'a> {
@@ -113,8 +111,7 @@ impl<'a> SuffixArray<'a> {
 #[cfg(test)]
 mod test {
     use super::*;
-    const SA_BANANA: &str =
-        "SUFFIX ARRAY FOR banana banana banana:\n0:\t\'\'\n1:\t\' \
+    const SA_BANANA: &str = "SUFFIX ARRAY FOR banana banana banana:\n0:\t\'\'\n1:\t\' \
          banana\'\n2:\t\' banana banana\'\n3:\t\'a\'\n4:\t\'a banana\'\n5:\t\'a banana \
          banana\'\n6:\t\'ana\'\n7:\t\'ana banana\'\n8:\t\'ana banana banana\'\n9:\t\'\
          anana\'\n10:\t\'anana banana\'\n11:\t\'anana banana banana\'\n12:\t\'banana\'\n\

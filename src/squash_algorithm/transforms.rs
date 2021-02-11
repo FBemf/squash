@@ -1,5 +1,3 @@
-#![warn(clippy::all)]
-
 use crate::suffixarray::SuffixArray;
 use std::convert::TryInto;
 
@@ -36,19 +34,19 @@ pub fn bw_transform(plaintext: &[u8]) -> BwVec {
     }
 }
 
-pub fn bw_untransform(cyphertext: &BwVec) -> Vec<u8> {
-    let mut out = vec![0; cyphertext.block.len() - 1];
+pub fn bw_untransform(ciphertext: &BwVec) -> Vec<u8> {
+    let mut out = vec![0; ciphertext.block.len() - 1];
 
     // counts stores the number of items of each
-    // kind in the cyphertext
+    // kind in the ciphertext
     let mut counts = vec![0; 256];
 
-    // position stores, for each entry in cyphetext, n
+    // position stores, for each entry in ciphertext, n
     // where the entry is the nth instance of its kind
     // starting at zero
-    let mut position = vec![0; cyphertext.block.len()];
-    for (index, val) in cyphertext.block.iter().enumerate() {
-        if index != cyphertext.end_index.try_into().unwrap() {
+    let mut position = vec![0; ciphertext.block.len()];
+    for (index, val) in ciphertext.block.iter().enumerate() {
+        if index != ciphertext.end_index.try_into().unwrap() {
             position[index] = counts[*val as usize];
             counts[*val as usize] += 1;
         }
@@ -66,8 +64,8 @@ pub fn bw_untransform(cyphertext: &BwVec) -> Vec<u8> {
     }
 
     let mut next_index = 0;
-    for out_index in (0..cyphertext.block.len() - 1).rev() {
-        let next_item = cyphertext.block[next_index];
+    for out_index in (0..ciphertext.block.len() - 1).rev() {
+        let next_item = ciphertext.block[next_index];
         out[out_index] = next_item;
 
         let char_position = position[next_index];
@@ -95,13 +93,13 @@ pub fn mtf_transform(plaintext: &[u8]) -> Vec<u8> {
     out
 }
 
-pub fn mtf_untransform(cyphertext: &[u8]) -> Vec<u8> {
+pub fn mtf_untransform(ciphertext: &[u8]) -> Vec<u8> {
     let mut dict = Vec::with_capacity(256);
-    let mut out = Vec::with_capacity(cyphertext.len());
+    let mut out = Vec::with_capacity(ciphertext.len());
     for i in (0..256).rev() {
         dict.push(i as u8);
     }
-    for item in cyphertext {
+    for item in ciphertext {
         let i = dict[*item as usize];
         out.push(i);
         dict.remove(*item as usize);
@@ -139,20 +137,20 @@ pub fn run_length_encode(plaintext: &[u8]) -> Vec<RunEncoded> {
     }
 }
 
-pub fn run_length_decode(cyphertext: &[RunEncoded]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(cyphertext.len());
+pub fn run_length_decode(ciphertext: &[RunEncoded]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(ciphertext.len());
     let mut index = 0;
     loop {
-        if index >= cyphertext.len() {
+        if index >= ciphertext.len() {
             break;
         }
-        if let RunEncoded::Byte(b) = cyphertext[index] {
+        if let RunEncoded::Byte(b) = ciphertext[index] {
             out.push(b);
             index += 1;
         } else {
             let mut zeros = vec![];
-            while index < cyphertext.len() {
-                if let RunEncoded::ZeroRun(z) = cyphertext[index] {
+            while index < ciphertext.len() {
+                if let RunEncoded::ZeroRun(z) = ciphertext[index] {
                     zeros.push(z);
                     index += 1
                 } else {
