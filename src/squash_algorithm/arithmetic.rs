@@ -24,8 +24,8 @@ impl ArithmeticEncoder {
         }
     }
 
-    pub fn read_config(reader: &mut dyn io::Read) -> Result<Self, io::Error> {
-        let mut buffer = [0, 0, 0, 0];
+    pub fn read_config(reader: &mut dyn io::Read) -> io::Result<Self> {
+        let mut buffer = [0; 4];
 
         reader.read_exact(&mut buffer)?;
         let frequency_memory = u32::from_le_bytes(buffer);
@@ -41,7 +41,7 @@ impl ArithmeticEncoder {
         })
     }
 
-    pub fn write_config(&self, writer: &mut dyn io::Write) -> Result<(), io::Error> {
+    pub fn write_config(&self, writer: &mut dyn io::Write) -> io::Result<()> {
         writer.write_all(&self.frequency_memory.to_le_bytes())?;
         writer.write_all(&self.frequency_padding.to_le_bytes())?;
         writer.write_all(&self.recalculation_frequency.to_le_bytes())?;

@@ -6,10 +6,11 @@ use super::arithmetic::*;
 use super::transforms::*;
 
 const BLOCK_SIZE: usize = 1 << 18;
-const MAGIC_NUMBER: u32 = 0xca55_e77e;
+const MAGIC_NUMBER: u32 = 0xca55_e77e; // cassette :)
 const FILETYPE_VERSION: u8 = 1;
 
-pub fn squash(reader: &mut dyn io::Read, writer: &mut dyn io::Write) -> Result<(), io::Error> {
+// read from input stream, compress, and write to output stream
+pub fn squash(reader: &mut dyn io::Read, writer: &mut dyn io::Write) -> io::Result<()> {
     writer.write_all(&MAGIC_NUMBER.to_le_bytes())?;
     writer.write_all(&FILETYPE_VERSION.to_le_bytes())?;
 
@@ -34,7 +35,8 @@ pub fn squash(reader: &mut dyn io::Read, writer: &mut dyn io::Write) -> Result<(
     Ok(())
 }
 
-pub fn unsquash(reader: &mut dyn io::Read, writer: &mut dyn io::Write) -> Result<(), io::Error> {
+// read from input stream, decompress, and write to output stream
+pub fn unsquash(reader: &mut dyn io::Read, writer: &mut dyn io::Write) -> io::Result<()> {
     let mut one_byte: [u8; 1] = [0; 1];
     let mut four_bytes: [u8; 4] = [0; 4];
 
@@ -76,7 +78,8 @@ pub fn unsquash(reader: &mut dyn io::Read, writer: &mut dyn io::Write) -> Result
     Ok(())
 }
 
-pub fn squash_block(plaintext: &[u8], arithmetic_encoder: &ArithmeticEncoder) -> Vec<u8> {
+// squash on a block of plaintext
+fn squash_block(plaintext: &[u8], arithmetic_encoder: &ArithmeticEncoder) -> Vec<u8> {
     let bwt_encoded = bw_transform(plaintext);
     let mtf_encoded = mtf_transform(&bwt_encoded.block);
     let rle_encoded = run_length_encode(&mtf_encoded);
@@ -94,7 +97,8 @@ pub fn squash_block(plaintext: &[u8], arithmetic_encoder: &ArithmeticEncoder) ->
     )
 }
 
-pub fn unsquash_block(
+// unsquash on a block of ciphertext
+fn unsquash_block(
     ciphertext: &[u8],
     arithmetic_encoder: &ArithmeticEncoder,
 ) -> Result<Vec<u8>, &'static str> {
