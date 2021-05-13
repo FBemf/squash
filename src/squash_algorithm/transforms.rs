@@ -9,6 +9,7 @@ pub struct BwVec {
     pub end_index: u32,
 }
 
+// do a burrows-wheeler transform on a plaintext
 pub fn bw_transform(plaintext: &[u8]) -> BwVec {
     if plaintext.is_empty() {
         return BwVec {
@@ -34,6 +35,7 @@ pub fn bw_transform(plaintext: &[u8]) -> BwVec {
     }
 }
 
+// undo a burrows-wheeler transform, leaving plaintext
 pub fn bw_untransform(ciphertext: &BwVec) -> Vec<u8> {
     let mut out = vec![0; ciphertext.block.len() - 1];
 
@@ -75,6 +77,7 @@ pub fn bw_untransform(ciphertext: &BwVec) -> Vec<u8> {
     out
 }
 
+// do a move-to-front transform on some data
 pub fn mtf_transform(plaintext: &[u8]) -> Vec<u8> {
     let mut dict = Vec::with_capacity(256);
     let mut out = Vec::with_capacity(plaintext.len());
@@ -93,6 +96,7 @@ pub fn mtf_transform(plaintext: &[u8]) -> Vec<u8> {
     out
 }
 
+// undo a move-to-front transform on data
 pub fn mtf_untransform(ciphertext: &[u8]) -> Vec<u8> {
     let mut dict = Vec::with_capacity(256);
     let mut out = Vec::with_capacity(ciphertext.len());
@@ -110,10 +114,17 @@ pub fn mtf_untransform(ciphertext: &[u8]) -> Vec<u8> {
 
 #[derive(PartialEq, Debug)]
 pub enum RunEncoded {
+    // a single raw byte
     Byte(u8),
+    // a run of one or more zeros.
+    // The length of a run of zeros is encoded in a sequence of As and Bs, such that a run of
+    // 9 zeros would be represented as [ZeroRun(A), ZeroRun(B), ZeroRun(A)] => "ABA" => 9.
+    // See https://en.wikipedia.org/wiki/Bzip2#Run-length_encoding_of_MTF_result for more info
     ZeroRun(Bijective),
 }
 
+// perform run-length encoding on the zeros in a plaintext
+// (note: the mtf transform creates many runs of zeros)
 pub fn run_length_encode(plaintext: &[u8]) -> Vec<RunEncoded> {
     let mut out = Vec::with_capacity(plaintext.len());
     let mut index = 0;
@@ -137,6 +148,7 @@ pub fn run_length_encode(plaintext: &[u8]) -> Vec<RunEncoded> {
     }
 }
 
+// undo run-length encoding
 pub fn run_length_decode(ciphertext: &[RunEncoded]) -> Vec<u8> {
     let mut out = Vec::with_capacity(ciphertext.len());
     let mut index = 0;
@@ -171,6 +183,7 @@ pub enum Bijective {
     B,
 }
 
+// encode an ingeger > 0 using the bzip bijective encoding
 pub fn to_bijective(num: u32) -> Vec<Bijective> {
     let mut out = vec![];
     if num == 0 {
@@ -199,6 +212,7 @@ pub fn to_bijective(num: u32) -> Vec<Bijective> {
     out
 }
 
+// decode an ingeger > 0 encoded using the bzip bijective encoding
 pub fn from_bijective(num: &[Bijective]) -> u32 {
     if num.is_empty() {
         return 0;

@@ -1,5 +1,7 @@
 use std::cmp::Ordering;
 
+// A suffix array is a sorted list of all the suffixes of a given text.
+// It plays an important role in burrows-wheeler transformations
 pub struct SuffixArray<'a> {
     _text: &'a [u8],
     array: Vec<usize>,
@@ -7,7 +9,10 @@ pub struct SuffixArray<'a> {
 
 #[derive(Clone)]
 struct Suffix {
+    // the index in the text where this suffix begins.
+    // e.g. for the text [0:'a', 1:'b', 2:'c'], the suffix "bc" begins at index 1
     index: usize,
+    // the primary and secondary rank of the suffix, used in the suffix array construction algorithm
     rank: (i64, i64),
 }
 
@@ -22,6 +27,7 @@ fn suffix_compare(a: &Suffix, b: &Suffix) -> Ordering {
 impl<'a> SuffixArray<'a> {
     pub fn from_array(body: &'a [u8]) -> SuffixArray {
         // special thanks to https://www.geeksforgeeks.org/suffix-array-set-2-a-nlognlogn-algorithm/
+        // for providing the algorithm I have re-implemented here
         let mut array: Vec<Suffix> = vec![
             Suffix {
                 index: 0,

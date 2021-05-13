@@ -11,12 +11,14 @@ const FILETYPE_VERSION: u8 = 1;
 
 // read from input stream, compress, and write to output stream
 pub fn squash(reader: &mut dyn io::Read, writer: &mut dyn io::Write) -> io::Result<()> {
+    // write file metadata
     writer.write_all(&MAGIC_NUMBER.to_le_bytes())?;
     writer.write_all(&FILETYPE_VERSION.to_le_bytes())?;
 
     let arithmetic_encoder = ArithmeticEncoder::default_encoder();
-    arithmetic_encoder.write_config(writer)?;
+    arithmetic_encoder.write_config(writer)?; // write arithmetic encoding metadata
 
+    // block by block, compress and write data into the file
     loop {
         let mut block = vec![0; BLOCK_SIZE];
         let bytes = reader.read(&mut block)?;
@@ -37,20 +39,23 @@ pub fn squash(reader: &mut dyn io::Read, writer: &mut dyn io::Write) -> io::Resu
 
 // read from input stream, decompress, and write to output stream
 pub fn unsquash(reader: &mut dyn io::Read, writer: &mut dyn io::Write) -> io::Result<()> {
+    // buffers
     let mut one_byte: [u8; 1] = [0; 1];
     let mut four_bytes: [u8; 4] = [0; 4];
 
+    // read file metadata
     reader.read_exact(&mut four_bytes)?;
     let magic_number = u32::from_le_bytes(four_bytes);
-    assert_eq!(magic_number, MAGIC_NUMBER);
-
     reader.read_exact(&mut one_byte)?;
     let version_number = u8::from_le_bytes(one_byte);
+    assert_eq!(magic_number, MAGIC_NUMBER);
     assert_eq!(version_number, FILETYPE_VERSION);
 
+    // read arithmetic encoding metadata
     let arithmetic_encoder = ArithmeticEncoder::read_config(reader)?;
 
     loop {
+        // read the length of the next block
         let block_len = match reader.read(&mut four_bytes)? {
             0 => {
                 break;
@@ -60,6 +65,7 @@ pub fn unsquash(reader: &mut dyn io::Read, writer: &mut dyn io::Write) -> io::Re
                 panic!("expected something");
             }
         };
+        // read and uncompress the next block
         let mut block = vec![0; block_len.try_into().unwrap()];
         match reader.read(&mut block)? {
             0 => {
@@ -78,7 +84,7 @@ pub fn unsquash(reader: &mut dyn io::Read, writer: &mut dyn io::Write) -> io::Re
     Ok(())
 }
 
-// squash on a block of plaintext
+// squash a block of plaintext
 fn squash_block(plaintext: &[u8], arithmetic_encoder: &ArithmeticEncoder) -> Vec<u8> {
     let bwt_encoded = bw_transform(plaintext);
     let mtf_encoded = mtf_transform(&bwt_encoded.block);
@@ -97,7 +103,7 @@ fn squash_block(plaintext: &[u8], arithmetic_encoder: &ArithmeticEncoder) -> Vec
     )
 }
 
-// unsquash on a block of ciphertext
+// unsquash a block of compressed data
 fn unsquash_block(
     ciphertext: &[u8],
     arithmetic_encoder: &ArithmeticEncoder,
